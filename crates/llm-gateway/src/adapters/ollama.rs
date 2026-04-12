@@ -108,6 +108,8 @@ struct OllamaChatRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    /// 關閉 thinking mode（gemma4 等模型預設會內部推理，佔用大量 token）
+    think: bool,
 }
 
 #[derive(Serialize)]
@@ -137,7 +139,10 @@ struct OllamaChatResponse {
 
 #[derive(Deserialize)]
 struct OllamaResponseMessage {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 /// Ollama /api/chat 串流 chunk
@@ -216,7 +221,7 @@ impl LlmProvider for OllamaProvider {
             None
         };
 
-        let body = OllamaChatRequest { model, messages, stream: false, options };
+        let body = OllamaChatRequest { model, messages, stream: false, options, think: false };
 
         debug!(provider = "ollama", model, "sending chat request");
 
@@ -242,7 +247,16 @@ impl LlmProvider for OllamaProvider {
             .error_for_status()
             .map_err(|e| LlmError::Provider { provider: "ollama".into(), message: e.to_string() })?;
 
-        let ollama_resp: OllamaChatResponse = resp.json().await?;
+        let raw_text = resp.text().await?;
+        debug!(provider = "ollama", raw_len = raw_text.len(), "raw response received");
+        let ollama_resp: OllamaChatResponse = serde_json::from_str(&raw_text)?;
+
+        // 若 content 為空但有 thinking（模型未遵守 think:false），fallback 用 thinking
+        let content = if ollama_resp.message.content.is_empty() {
+            ollama_resp.message.thinking.unwrap_or_default()
+        } else {
+            ollama_resp.message.content
+        };
 
         let usage = match (ollama_resp.prompt_eval_count, ollama_resp.eval_count) {
             (Some(p), Some(c)) => Some(TokenUsage {
@@ -254,7 +268,7 @@ impl LlmProvider for OllamaProvider {
         };
 
         Ok(ChatResponse {
-            content: ollama_resp.message.content,
+            content,
             model: ollama_resp.model,
             usage,
             extensions: HashMap::new(),

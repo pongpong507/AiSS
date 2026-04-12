@@ -153,7 +153,7 @@ async fn run_doctor(args: &Args) -> anyhow::Result<()> {
         vec![ChatMessage::user("用一句話說：你好。")],
     )
     .with_temperature(0.3)
-    .with_max_tokens(32);
+    .with_max_tokens(256);
     let resp = provider
         .chat(probe)
         .await

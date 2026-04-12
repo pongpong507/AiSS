@@ -3,7 +3,7 @@ members = [
     "crates/shared-types",
     "crates/llm-gateway",
     "crates/infolit-game",
-    "crates/aiss-import",
+    "docker-infolit",
 ]
 resolver = "2"
 
