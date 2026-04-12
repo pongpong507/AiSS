@@ -1,0 +1,7 @@
+id: "outdated-info"
+name_zh: "過時資訊"
+description: "引用很久以前的資料或研究，卻不說明時效性，讓人誤以為是最新事實"
+example: "1970 年代的研究就已經證明，這個方法一定有效！"
+difficulty: easy
+teaching_goal: "訓練學生注意資訊的時效性，學會追問「這是最近的嗎？」（對應手冊「何時發布？」三問查核法）"
+affinity: 7

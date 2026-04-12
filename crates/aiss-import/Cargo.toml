@@ -1,0 +1,22 @@
+[package]
+name = "aiss-import"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aiss-import"
+path = "src/main.rs"
+
+[dependencies]
+shared-types = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+csv = { workspace = true }
+calamine = { workspace = true }

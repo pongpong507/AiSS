@@ -1,0 +1,7 @@
+id: "hasty-generalization"
+name_zh: "以偏概全"
+description: "從少數例子推論出普遍規律，忽略樣本不代表全體的問題"
+example: "我吃了這個保健品，感冒好了。所以這個保健品對所有感冒都有效！"
+difficulty: medium
+teaching_goal: "訓練學生評估樣本與代表性，理解「一個例子不等於通則」（對應手冊「合不合理？」）"
+affinity: 6

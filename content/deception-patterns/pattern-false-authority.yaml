@@ -1,0 +1,7 @@
+id: "false-authority"
+name_zh: "假借權威"
+description: "引用某個領域的專家去支持另一個完全不相關領域的說法"
+example: "這位諾貝爾物理學獎得主說，這種草藥可以治百病，所以一定有效！"
+difficulty: hard
+teaching_goal: "訓練學生判斷「專家的專業是否和論點相關」（對應手冊「誰說的？」三問查核法）"
+affinity: 9

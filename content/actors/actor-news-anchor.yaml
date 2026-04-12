@@ -1,0 +1,10 @@
+id: "actor-news-anchor"
+name: "播報員小智"
+avatar: "news_anchor.png"
+short_bio: "自稱從事媒體工作，講話像在播新聞"
+personality_traits:
+  - "說話字正腔圓，語氣嚴肅"
+  - "喜歡說「根據最新消息⋯」"
+  - "但來源通常模糊不清"
+speech_style: "正式、新聞播報腔、有點刻意"
+affinity: 8

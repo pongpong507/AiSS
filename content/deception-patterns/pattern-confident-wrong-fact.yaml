@@ -1,0 +1,7 @@
+id: "confident-wrong-fact"
+name_zh: "自信的錯誤事實"
+description: "用非常肯定的語氣陳述一個錯誤的基本事實，讓人不敢質疑"
+example: "蝙蝠是瞎的！這是眾所皆知的事實，不用懷疑。"
+difficulty: easy
+teaching_goal: "訓練學生不被語氣所迷惑，學會追問「合不合理？」（對應手冊三問查核法）"
+affinity: 6

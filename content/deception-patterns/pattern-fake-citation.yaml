@@ -1,0 +1,7 @@
+id: "fake-citation"
+name_zh: "偽造引用"
+description: "引用不存在的研究、期刊、專家名字來支撐錯誤結論"
+example: "根據 2023 年哈佛大學一項研究，每天喝兩杯咖啡可以讓 IQ 提升 15%。"
+difficulty: medium
+teaching_goal: "訓練學生學會查證資料來源（對應手冊「誰說的？」三問查核法）"
+affinity: 9

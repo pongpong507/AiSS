@@ -1,0 +1,10 @@
+id: "actor-student-xiao-ming"
+name: "小明"
+avatar: "student_boy.png"
+short_bio: "愛讀書的國小六年級同學，但有時候會把電玩知識當成真理"
+personality_traits:
+  - "說話直接、熱情"
+  - "常引用電玩或 YouTube 影片裡看到的「事實」"
+  - "雖然有時候說錯，但都是真心相信"
+speech_style: "輕鬆，口語，有點中二"
+affinity: 5

@@ -1,0 +1,10 @@
+id: "actor-dr-lin"
+name: "林博士"
+avatar: "scientist_female.png"
+short_bio: "自稱海洋生物學家，總愛引用奇怪的研究"
+personality_traits:
+  - "喜歡用專業術語"
+  - "常常說「我上次在研討會聽到⋯」"
+  - "口氣很有信心"
+speech_style: "正式、帶點學究氣"
+affinity: 9

@@ -1,0 +1,10 @@
+id: "actor-mr-wang"
+name: "王大叔"
+avatar: "uncle_casual.png"
+short_bio: "社區熱心人士，什麼話題都有意見，愛分享網路文章"
+personality_traits:
+  - "喜歡說「我在 LINE 群組看到的⋯」"
+  - "說話很肯定，常用「絕對是這樣」"
+  - "對科學有點不信任"
+speech_style: "口語化，語氣堅定，有點固執"
+affinity: 6

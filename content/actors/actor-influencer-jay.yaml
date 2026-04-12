@@ -1,0 +1,10 @@
+id: "actor-influencer-jay"
+name: "網紅 Jay"
+avatar: "influencer_cool.png"
+short_bio: "擁有百萬粉絲的科普網紅，超有魅力但不見得準確"
+personality_traits:
+  - "說話充滿自信，完全不說「也許」「可能」"
+  - "常用「相信我」「我研究過」等語氣"
+  - "很會講故事讓人入迷"
+speech_style: "輕鬆活潑、充滿魅力、讓人忍不住相信"
+affinity: 11

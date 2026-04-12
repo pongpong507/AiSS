@@ -1,0 +1,60 @@
+[workspace]
+members = [
+    "crates/shared-types",
+    "crates/llm-gateway",
+    "crates/infolit-game",
+    "crates/aiss-import",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["AiSS Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# Web / HTTP
+reqwest = { version = "0.12", features = ["json", "stream"] }
+axum = { version = "0.7", features = ["ws"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Async trait
+async-trait = "0.1"
+
+# Futures / streams
+futures = "0.3"
+pin-project-lite = "0.2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Random
+rand = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# CSV / Excel import
+csv = "1"
+calamine = "0.25"
+
+# Internal crates
+shared-types = { path = "crates/shared-types" }
+llm-gateway = { path = "crates/llm-gateway" }

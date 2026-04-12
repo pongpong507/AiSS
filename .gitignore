@@ -1,0 +1,22 @@
+/target/
+.env
+.env.*
+secrets.toml
+*.key
+*.pem
+
+# Claude Code 本地設定
+.claude/
+
+# 教育部 PDF 手冊（太大不進 Git，本地參考用）
+*.pdf
+
+# Obsidian 個人設定（不進版控）
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+docs/.obsidian/plugins/
+
+# 系統檔
+.DS_Store
+Thumbs.db
+desktop.ini

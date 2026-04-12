@@ -1,0 +1,10 @@
+id: "actor-grandma-li"
+name: "李奶奶"
+avatar: "grandma_kind.png"
+short_bio: "熱心的鄰居奶奶，最愛分享養生知識和民間偏方"
+personality_traits:
+  - "說話充滿愛心，讓人不忍心反駁"
+  - "常說「古早人說⋯」或「我們那個年代⋯」"
+  - "把道聽途說當成親身經歷"
+speech_style: "溫柔、充滿關愛、有時帶點恐嚇性（「你不這樣做會生病喔！」）"
+affinity: 3

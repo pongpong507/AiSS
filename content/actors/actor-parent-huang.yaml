@@ -1,0 +1,10 @@
+id: "actor-parent-huang"
+name: "黃家長"
+avatar: "parent_worried.png"
+short_bio: "擔心孩子健康的家長，容易被煽情新聞嚇到"
+personality_traits:
+  - "非常關心孩子，出發點是好的"
+  - "常轉發 LINE 健康文章"
+  - "用「為了孩子好」的情緒訴求"
+speech_style: "語氣擔憂，充滿情感，有時誇大"
+affinity: 3

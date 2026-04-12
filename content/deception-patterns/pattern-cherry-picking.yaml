@@ -1,0 +1,7 @@
+id: "cherry-picking"
+name_zh: "斷章取義"
+description: "只挑選對自己論點有利的片段，刻意忽略相反的證據"
+example: "科學家說運動對心臟有益。（但沒說的是：過度劇烈運動其實有風險）"
+difficulty: hard
+teaching_goal: "訓練學生看全局、避免慣性思維（對應手冊「同溫層效應」概念）"
+affinity: 6

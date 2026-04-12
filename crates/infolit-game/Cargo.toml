@@ -1,0 +1,25 @@
+[package]
+name = "infolit-game"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "infolit-cli"
+path = "src/main.rs"
+
+[dependencies]
+shared-types = { workspace = true }
+llm-gateway = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+clap = { workspace = true }

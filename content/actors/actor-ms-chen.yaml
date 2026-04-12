@@ -1,0 +1,10 @@
+id: "actor-ms-chen"
+name: "陳同學"
+avatar: "student_curious.png"
+short_bio: "好奇心旺盛的高年級同學，對什麼都有問題"
+personality_traits:
+  - "喜歡反問「可是我聽說⋯」"
+  - "認真查資料"
+  - "有時候會被權威嚇到"
+speech_style: "活潑，帶問號，誠懇"
+affinity: 4
