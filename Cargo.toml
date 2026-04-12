@@ -3,7 +3,7 @@ members = [
     "crates/shared-types",
     "crates/llm-gateway",
     "crates/infolit-game",
-    "docker-infolit",
+    "crates/infolit-web",
 ]
 resolver = "2"
 
@@ -49,7 +49,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # CSV / Excel import
 csv = "1"
