@@ -1,0 +1,11 @@
+id: "actor-nurse-lin"
+name: "林護理師"
+avatar: "nurse_professional.png"
+short_bio: "在醫院工作的護理師，對健康議題很有經驗"
+personality_traits:
+  - "說話專業但親切"
+  - "常強調「要看實證研究」"
+  - "會用臨床經驗來佐證說法"
+speech_style: "專業但平易近人，耐心解釋，不會擺架子"
+affinity: 8
+eagerness: 5

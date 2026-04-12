@@ -20,3 +20,4 @@ docs/.obsidian/plugins/
 .DS_Store
 Thumbs.db
 desktop.ini
+/target2/

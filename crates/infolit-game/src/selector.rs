@@ -38,8 +38,13 @@ pub fn assemble_session(
     selected.shuffle(&mut rng);
     let selected = selected[..actor_count].to_vec();
 
-    // 隨機指定騙子（取前 liar_count 個）
-    let liar_ids: Vec<String> = selected[..liar_count].iter().map(|a| a.id.clone()).collect();
+    // 隨機指定騙子（從 selected 中隨機挑，而非固定取前 N 個）
+    let mut liar_candidates: Vec<usize> = (0..actor_count).collect();
+    liar_candidates.shuffle(&mut rng);
+    let liar_ids: Vec<String> = liar_candidates[..liar_count]
+        .iter()
+        .map(|&i| selected[i].id.clone())
+        .collect();
 
     // 為每個騙子指派騙術
     let mut deceptions = HashMap::new();
@@ -92,6 +97,7 @@ mod tests {
             personality_traits: vec![],
             speech_style: String::new(),
             affinity,
+            eagerness: 5,
         }
     }
 
@@ -212,5 +218,56 @@ mod tests {
         }
         // 在 100 次中，d_match 至少應該被選 50 次（85% * 9/10 ≈ 76% 期望值）
         assert!(count_match > 50, "affinity 加權未正常工作：match count = {}", count_match);
+    }
+
+    #[test]
+    fn liar_is_not_always_first_actor() {
+        // 跑 100 次 assemble_session，統計騙子是第一個演員的次數
+        // 如果騙子真的隨機分配，不該每次都是第一個
+        let actors: Vec<Actor> = (0..5)
+            .map(|i| make_actor(&format!("a{i}"), (i as u8 * 2) + 1))
+            .collect();
+        let catalog: Vec<DeceptionPattern> = vec![
+            make_deception("d1", 5),
+            make_deception("d2", 8),
+        ];
+
+        let mut liar_is_first_count = 0;
+        for _ in 0..100 {
+            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1).unwrap();
+            // 騙子 ID 是否等於 selected 陣列的第一個演員 ID
+            if liars[0] == selected[0].id {
+                liar_is_first_count += 1;
+            }
+        }
+        // 如果隨機分配，期望值 ~33%（1/3）。舊版是 100%。
+        // 容許到 70 以避免極端機率誤判，但不該是 100
+        assert!(
+            liar_is_first_count < 70,
+            "騙子排在第一位的次數 = {}，應該隨機分散而非集中在第一位",
+            liar_is_first_count
+        );
+    }
+
+    #[test]
+    fn liar_position_varies_across_runs() {
+        // 確認騙子不會永遠在同一個位置
+        let actors: Vec<Actor> = (0..5)
+            .map(|i| make_actor(&format!("a{i}"), (i as u8 * 2) + 1))
+            .collect();
+        let catalog = vec![make_deception("d1", 5)];
+
+        let mut positions = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1).unwrap();
+            let pos = selected.iter().position(|a| a.id == liars[0]).unwrap();
+            positions.insert(pos);
+        }
+        // 50 次中應該出現至少 2 種不同位置
+        assert!(
+            positions.len() >= 2,
+            "騙子位置只出現在 {:?}，缺乏隨機性",
+            positions
+        );
     }
 }

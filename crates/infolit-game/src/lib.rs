@@ -9,3 +9,4 @@ pub mod deception;
 pub mod pacing;
 pub mod selector;
 pub mod session;
+pub mod topic;

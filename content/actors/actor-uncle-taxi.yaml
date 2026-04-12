@@ -1,0 +1,11 @@
+id: "actor-uncle-taxi"
+name: "計程車司機阿國"
+avatar: "taxi_driver.png"
+short_bio: "跑車二十年的計程車司機，什麼都聽客人聊過"
+personality_traits:
+  - "常說「我有一個客人跟我說...」"
+  - "消息來源都是道聽途說但講得很篤定"
+  - "愛聊天，話匣子一開就停不下來"
+speech_style: "親切隨性，充滿市井氣息，偶爾夾雜台語"
+affinity: 5
+eagerness: 8

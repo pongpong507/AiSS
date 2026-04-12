@@ -14,11 +14,11 @@ use infolit_game::{
     pacing::PacingConfig,
     selector::assemble_session,
     session::GameSession,
+    topic::load_topics_from_dir,
 };
-use llm_gateway::adapters::OllamaProvider;
+use llm_gateway::adapters::{OllamaProvider, ThinkingMode};
 use llm_gateway::provider::LlmProvider;
 use llm_gateway::types::{ChatMessage, ChatRequest};
-use shared_types::{Difficulty, Topic};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,36 +51,21 @@ struct Args {
     #[arg(long)]
     no_delay: bool,
 
+    /// 啟用 thinking 模式（gemma4 等模型會先推理再回答，品質更好但較慢）
+    #[arg(long)]
+    think: bool,
+
     /// 預檢模式：只檢查 Ollama 與內容資料就緒，不進入遊戲
     #[arg(long)]
     doctor: bool,
-}
 
-/// 硬編碼的種子題庫（Milestone 0，真實題庫由 aiss-import 匯入）
-fn seed_topics() -> Vec<Topic> {
-    vec![
-        Topic {
-            id: "q-001".into(),
-            question: "海豚真的是魚類嗎？".into(),
-            correct_answer: "不是。海豚是哺乳類動物，需要浮出水面呼吸空氣，用肺呼吸，而非用鰓。".into(),
-            difficulty: Difficulty::Easy,
-            tags: vec!["生物".into(), "海洋".into()],
-        },
-        Topic {
-            id: "q-002".into(),
-            question: "微波爐加熱食物之後，食物會帶有輻射嗎？".into(),
-            correct_answer: "不會。微波爐使用的是非電離輻射（電磁波），只是讓水分子振動產生熱，不會讓食物帶有放射性。".into(),
-            difficulty: Difficulty::Easy,
-            tags: vec!["科學".into(), "日常生活".into()],
-        },
-        Topic {
-            id: "q-003".into(),
-            question: "人類只使用了大腦的 10% 嗎？".into(),
-            correct_answer: "不是。這是一個流傳已久的迷思。神經科學研究顯示，幾乎所有大腦區域都有功能，長期不使用的腦區會萎縮。".into(),
-            difficulty: Difficulty::Medium,
-            tags: vec!["神經科學".into(), "迷思".into()],
-        },
-    ]
+    /// 自動繼續：玩家閒置 N 秒後，NPC 自動繼續對話（0 = 關閉）
+    #[arg(long, default_value_t = 0)]
+    auto_timeout: u64,
+
+    /// 顯示詳細 debug 訊息（預設只顯示對話內容）
+    #[arg(long)]
+    verbose: bool,
 }
 
 fn print_divider(label: &str) {
@@ -103,13 +88,17 @@ async fn run_doctor(args: &Args) -> anyhow::Result<()> {
     let actors_dir = args.content_dir.join("actors");
     let deceptions_dir = args.content_dir.join("deception-patterns");
 
+    let topics_dir = args.content_dir.join("topics");
+
     print!("  [1/4] 內容檔案... ");
     io::stdout().flush().ok();
     let actors = load_actors_from_dir(&actors_dir)
         .with_context(|| format!("載入演員失敗：{:?}", actors_dir))?;
     let catalog = load_deceptions_from_dir(&deceptions_dir)
         .with_context(|| format!("載入騙術失敗：{:?}", deceptions_dir))?;
-    println!("✅ {} 位演員，{} 個騙術", actors.len(), catalog.len());
+    let topics = load_topics_from_dir(&topics_dir)
+        .with_context(|| format!("載入題庫失敗：{:?}", topics_dir))?;
+    println!("✅ {} 位演員，{} 個騙術，{} 題題目", actors.len(), catalog.len(), topics.len());
 
     if actors.len() < args.actors {
         anyhow::bail!(
@@ -120,7 +109,8 @@ async fn run_doctor(args: &Args) -> anyhow::Result<()> {
     }
 
     // 2. Ollama 服務存活
-    let provider = OllamaProvider::new(&args.ollama_url, &args.model);
+    let thinking = if args.think { ThinkingMode::On } else { ThinkingMode::Off };
+    let provider = OllamaProvider::new(&args.ollama_url, &args.model).with_thinking(thinking);
     print!("  [2/4] Ollama 連線（{}）... ", args.ollama_url);
     io::stdout().flush().ok();
     provider
@@ -174,9 +164,14 @@ async fn run_doctor(args: &Args) -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    let default_log = if args.verbose {
+        "infolit_game=info,llm_gateway=debug"
+    } else {
+        "infolit_game=warn,llm_gateway=warn"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "infolit_game=info,llm_gateway=debug".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| default_log.into()),
         )
         .init();
 
@@ -206,12 +201,16 @@ async fn main() -> anyhow::Result<()> {
     let (selected_actors, liar_ids, deceptions) =
         assemble_session(&actors, &catalog, args.actors, args.liars)?;
 
-    // 隨機選題
-    let topics = seed_topics();
+    // 從題庫載入並隨機選題
+    let topics_dir = args.content_dir.join("topics");
+    let topics = load_topics_from_dir(&topics_dir)
+        .with_context(|| format!("載入題庫失敗：{:?}", topics_dir))?;
     let topic = topics[rand::random::<usize>() % topics.len()].clone();
+    info!("載入 {} 題題目", topics.len());
 
     // ── 建立 Provider ─────────────────────────────────────────────────────────
-    let ollama = OllamaProvider::new(&args.ollama_url, &args.model);
+    let thinking = if args.think { ThinkingMode::On } else { ThinkingMode::Off };
+    let ollama = OllamaProvider::new(&args.ollama_url, &args.model).with_thinking(thinking);
     // 啟動前先 ping 一下，避免在遊戲半途才發現 Ollama 沒開
     ollama
         .health()
@@ -247,9 +246,10 @@ async fn main() -> anyhow::Result<()> {
     println!("輸入你想說的話，或輸入 /accuseN（例如 /accuse2）指控第 N 位成員說謊。");
     println!("輸入 /quit 結束遊戲。");
 
-    // ── 先讓所有演員各開場一次 ───────────────────────────────────────────────
+    // ── 先讓所有演員各開場一次（隨機順序）─────────────────────────────────────
     print_divider("📢 各成員開場發言");
-    for actor in &selected_actors.clone() {
+    let opening_order = session.speaking_order();
+    for actor in &opening_order {
         match session.actor_respond(&actor.id, &args.model).await {
             Ok(response) => print_turn(&actor.name, &response),
             Err(e) => {
@@ -260,9 +260,12 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 互動迴圈 ─────────────────────────────────────────────────────────────
     print_divider("💬 開始提問");
-    let stdin = io::stdin();
     let mut round = 0u32;
     const MAX_ROUNDS: u32 = 10;
+
+    if args.auto_timeout > 0 {
+        println!("（已啟用自動繼續：閒置 {} 秒後 NPC 會自動對話）", args.auto_timeout);
+    }
 
     loop {
         if round >= MAX_ROUNDS {
@@ -273,50 +276,81 @@ async fn main() -> anyhow::Result<()> {
         print!("\n你 > ");
         io::stdout().flush()?;
 
-        let mut input = String::new();
-        stdin.lock().read_line(&mut input)?;
-        let input = input.trim().to_string();
+        // 讀取玩家輸入（如果啟用 auto_timeout，逾時後自動繼續）
+        let input = if args.auto_timeout > 0 {
+            let timeout_dur = tokio::time::Duration::from_secs(args.auto_timeout);
+            let read_future = tokio::task::spawn_blocking(|| {
+                let mut buf = String::new();
+                io::stdin().lock().read_line(&mut buf).ok();
+                buf
+            });
+            match tokio::time::timeout(timeout_dur, read_future).await {
+                Ok(Ok(buf)) => buf.trim().to_string(),
+                _ => {
+                    println!("\n（你沉默了一會兒，NPC 們繼續討論...）");
+                    String::new()
+                }
+            }
+        } else {
+            let mut buf = String::new();
+            io::stdin().lock().read_line(&mut buf)?;
+            buf.trim().to_string()
+        };
 
+        // 空輸入：如果有 auto_timeout，讓 NPC 自動對話；否則等待重新輸入
         if input.is_empty() {
-            continue;
-        }
-
-        // 解析指令
-        if input == "/quit" {
-            println!("（遊戲結束）");
-            return Ok(());
-        }
-
-        if let Some(rest) = input.strip_prefix("/accuse") {
-            // 指控某個成員
-            let idx: usize = rest.trim().parse().unwrap_or(0);
-            if idx < 1 || idx > selected_actors.len() {
-                println!("請輸入有效的成員編號（1 到 {}）", selected_actors.len());
+            if args.auto_timeout > 0 {
+                round += 1;
+                // NPC 自動繼續，不加學生訊息
+            } else {
                 continue;
             }
-            let accused = &selected_actors[idx - 1];
+        } else {
+            // 解析指令
+            if input == "/quit" {
+                println!("（遊戲結束）");
+                return Ok(());
+            }
 
-            print!("你的理由（按 Enter 跳過）：");
-            io::stdout().flush()?;
-            let mut reason = String::new();
-            stdin.lock().read_line(&mut reason)?;
-            let reason = reason.trim().to_string();
+            if let Some(rest) = input.strip_prefix("/accuse") {
+                let idx: usize = rest.trim().parse().unwrap_or(0);
+                if idx < 1 || idx > selected_actors.len() {
+                    println!("請輸入有效的成員編號（1 到 {}）", selected_actors.len());
+                    continue;
+                }
+                let accused = &selected_actors[idx - 1];
 
-            print_divider("⚖️  判決");
-            let (_verdict, feedback) = session.score(&accused.id, &reason);
-            println!("{}", feedback);
-            println!();
+                print!("你的理由（按 Enter 跳過）：");
+                io::stdout().flush()?;
+                let mut reason = String::new();
+                io::stdin().lock().read_line(&mut reason)?;
+                let reason = reason.trim().to_string();
 
-            // 揭露答案
-            println!("【正確答案】{}", topic.correct_answer);
-            break;
+                print_divider("⚖️  判決");
+                let (_verdict, feedback) = session.score(&accused.id, &reason);
+                println!("{}", feedback);
+                println!();
+                println!("【正確答案】{}", topic.correct_answer);
+                break;
+            }
+
+            // 一般輸入
+            session.student_says(input);
+            round += 1;
         }
 
-        // 一般輸入 → 讓所有演員回應
-        session.student_says(input);
-        round += 1;
-
-        for actor in &selected_actors.clone() {
+        // 檢查是否有沉默太久的演員，讓其他人 cue 他
+        let silent = session.silent_actors();
+        let turn_order = session.speaking_order();
+        for actor in &turn_order {
+            // 如果這個演員要 cue 沉默者，先印提示
+            if !silent.is_empty() && !silent.contains(&actor.id) {
+                for sid in &silent {
+                    if let Some(silent_actor) = selected_actors.iter().find(|a| &a.id == sid) {
+                        println!("\n（{} 轉向 {} 說：「你覺得呢？」）", actor.name, silent_actor.name);
+                    }
+                }
+            }
             match session.actor_respond(&actor.id, &args.model).await {
                 Ok(response) => print_turn(&actor.name, &response),
                 Err(e) => {

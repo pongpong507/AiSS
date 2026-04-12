@@ -1,3 +1,3 @@
 pub mod ollama;
 
-pub use ollama::OllamaProvider;
+pub use ollama::{OllamaProvider, ThinkingMode};

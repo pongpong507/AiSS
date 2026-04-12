@@ -19,15 +19,28 @@ pub struct Actor {
     pub speech_style: String,
     /// 向性值 1–12（錨點 3=情感 / 6=邏輯 / 9=正式權威 / 10-12=魅力/超然型）
     pub affinity: u8,
+    /// 對話積極度 1–10（越高越容易搶先發言），預設 5
+    #[serde(default = "default_eagerness")]
+    pub eagerness: u8,
+}
+
+fn default_eagerness() -> u8 {
+    5
 }
 
 impl Actor {
-    /// 驗證 affinity 值是否在有效範圍
+    /// 驗證欄位值是否在有效範圍
     pub fn validate(&self) -> Result<(), String> {
         if self.affinity < 1 || self.affinity > 12 {
             return Err(format!(
                 "演員 '{}' 的 affinity={} 不在有效範圍 [1, 12]",
                 self.id, self.affinity
+            ));
+        }
+        if self.eagerness < 1 || self.eagerness > 10 {
+            return Err(format!(
+                "演員 '{}' 的 eagerness={} 不在有效範圍 [1, 10]",
+                self.id, self.eagerness
             ));
         }
         Ok(())
@@ -69,6 +82,7 @@ mod tests {
             personality_traits: vec![],
             speech_style: String::new(),
             affinity,
+            eagerness: 5,
         }
     }
 

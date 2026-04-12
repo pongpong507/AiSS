@@ -17,13 +17,39 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, instrument};
 
+/// Thinking 模式設定
+///
+/// 部分模型（gemma4、QwQ 等）支援 thinking mode，會先產生內部推理再輸出最終回答。
+/// thinking 與 content 共用 token 預算，因此開啟時需要更多 max_tokens。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingMode {
+    /// 關閉 thinking（預設）— 所有 token 都給 content
+    Off,
+    /// 開啟 thinking — 自動將 max_tokens 放大以容納 thinking + content，
+    /// 回應只取 content，thinking 存入 extensions["thinking"] 供除錯
+    On,
+}
+
+impl Default for ThinkingMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
 /// Ollama provider，對應 Ollama REST API v1
 pub struct OllamaProvider {
     client: Client,
     base_url: String,
     /// 預設使用的模型（可被 ChatRequest.model 覆寫）
     default_model: String,
+    /// Thinking 模式設定
+    thinking: ThinkingMode,
 }
+
+/// thinking 開啟時，自動放大 max_tokens 的倍數
+const THINKING_TOKEN_MULTIPLIER: u32 = 4;
+/// thinking 開啟時的最低 max_tokens（確保 thinking + content 都有空間）
+const THINKING_MIN_TOKENS: u32 = 2048;
 
 impl OllamaProvider {
     pub fn new(base_url: impl Into<String>, default_model: impl Into<String>) -> Self {
@@ -37,12 +63,19 @@ impl OllamaProvider {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             default_model: default_model.into(),
+            thinking: ThinkingMode::Off,
         }
     }
 
     /// 使用預設 localhost:11434
     pub fn local(default_model: impl Into<String>) -> Self {
         Self::new("http://localhost:11434", default_model)
+    }
+
+    /// 設定 thinking 模式
+    pub fn with_thinking(mut self, mode: ThinkingMode) -> Self {
+        self.thinking = mode;
+        self
     }
 
     /// Health check：呼叫 `/api/tags` 確認 Ollama 服務存活
@@ -214,16 +247,24 @@ impl LlmProvider for OllamaProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
         let model = if req.model.is_empty() { &self.default_model } else { &req.model };
         let messages = build_messages(&req);
+        let think = self.thinking == ThinkingMode::On;
 
-        let options = if req.temperature.is_some() || req.max_tokens.is_some() {
-            Some(OllamaOptions { temperature: req.temperature, num_predict: req.max_tokens })
+        // thinking 開啟時自動放大 max_tokens，確保 thinking + content 都有空間
+        let effective_max_tokens = if think {
+            req.max_tokens.map(|t| (t * THINKING_TOKEN_MULTIPLIER).max(THINKING_MIN_TOKENS))
+        } else {
+            req.max_tokens
+        };
+
+        let options = if req.temperature.is_some() || effective_max_tokens.is_some() {
+            Some(OllamaOptions { temperature: req.temperature, num_predict: effective_max_tokens })
         } else {
             None
         };
 
-        let body = OllamaChatRequest { model, messages, stream: false, options, think: false };
+        let body = OllamaChatRequest { model, messages, stream: false, options, think };
 
-        debug!(provider = "ollama", model, "sending chat request");
+        debug!(provider = "ollama", model, think, ?effective_max_tokens, "sending chat request");
 
         let resp = self
             .client
@@ -251,9 +292,12 @@ impl LlmProvider for OllamaProvider {
         debug!(provider = "ollama", raw_len = raw_text.len(), "raw response received");
         let ollama_resp: OllamaChatResponse = serde_json::from_str(&raw_text)?;
 
-        // 若 content 為空但有 thinking（模型未遵守 think:false），fallback 用 thinking
+        let thinking = ollama_resp.message.thinking;
+
+        // content 有值就用 content；若 content 為空但有 thinking，fallback 用 thinking
         let content = if ollama_resp.message.content.is_empty() {
-            ollama_resp.message.thinking.unwrap_or_default()
+            debug!(provider = "ollama", "content is empty, falling back to thinking");
+            thinking.clone().unwrap_or_default()
         } else {
             ollama_resp.message.content
         };
@@ -267,11 +311,17 @@ impl LlmProvider for OllamaProvider {
             _ => None,
         };
 
+        // 把 thinking 存進 extensions 供除錯 / 教師後台使用
+        let mut extensions = HashMap::new();
+        if let Some(t) = thinking {
+            extensions.insert("thinking".into(), serde_json::Value::String(t));
+        }
+
         Ok(ChatResponse {
             content,
             model: ollama_resp.model,
             usage,
-            extensions: HashMap::new(),
+            extensions,
         })
     }
 

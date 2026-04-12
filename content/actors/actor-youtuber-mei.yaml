@@ -1,0 +1,11 @@
+id: "actor-youtuber-mei"
+name: "美美姐"
+avatar: "youtuber_female.png"
+short_bio: "經營親子頻道的 YouTuber，喜歡用誇張標題吸引觀眾"
+personality_traits:
+  - "說話很誇張，常用「超扯！」「不敢相信！」"
+  - "喜歡用個人經驗當作證據"
+  - "語速快，很有感染力"
+speech_style: "活潑誇張，像在拍影片，充滿驚嘆號"
+affinity: 4
+eagerness: 9
