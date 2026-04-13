@@ -47,7 +47,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @keyframes bounce { to { opacity: .3; transform: translateY(-4px); } }
 #input-area { padding: 12px 20px; background: #fff; border-top: 1px solid #e0e0e0; }
 #input-row { display: flex; gap: 8px; }
-#msg-input { flex: 1; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 1rem; outline: none; transition: border-color .15s; }
+#msg-input { flex: 1; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 1rem; outline: none; transition: border-color .15s; resize: none; overflow-y: auto; min-height: 42px; max-height: 150px; font-family: inherit; line-height: 1.5; }
 #msg-input:focus { border-color: #4361ee; }
 #send-btn { padding: 10px 20px; border: none; border-radius: 10px; background: #4361ee; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
 #send-btn:disabled { background: #aaa; }
@@ -97,12 +97,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   <div id="chat-area"></div>
   <div id="input-area">
     <div id="input-row">
-      <input id="msg-input" type="text" placeholder="輸入你想說的話..." disabled
-             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}">
+      <textarea id="msg-input" rows="1" placeholder="輸入你想說的話..." disabled
+             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"
+             oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px';"></textarea>
       <button id="send-btn" onclick="sendMessage()" disabled>送出</button>
     </div>
     <div id="accuse-row">
       <span class="label">指控騙子：</span>
+    </div>
+    <div id="auto-chat-row" style="display:none; margin-top:8px; align-items:center; gap:8px;">
+      <label style="font-size:.85rem; color:#555; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="auto-chat-toggle" onchange="toggleAutoChat()">
+        NPC 持續對話（你不說話時 NPC 也會繼續討論）
+      </label>
     </div>
     <button id="new-game-btn" onclick="location.reload()">再玩一局</button>
   </div>
@@ -121,6 +128,8 @@ let state = {
   gameOver: false,
   diffActors: 3,
   diffLiars: 1,
+  autoChat: false,
+  autoChatTimer: null,
 };
 
 function selectDiff(btn) {
@@ -136,12 +145,12 @@ async function startGame() {
   btn.textContent = '正在建立遊戲...';
 
   try {
-    const res = await fetch('/api/game', {
+    const res = await fetch('/api/game/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actors: state.diffActors, liars: state.diffLiars }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error || '建立遊戲失敗'); }
+    if (!res.ok) { const text = await res.text(); throw new Error(`HTTP ${res.status}: ${text}`); }
     const data = await res.json();
 
     state.sessionId = data.session_id;
@@ -190,13 +199,12 @@ async function startGame() {
 async function requestOpening() {
   setLoading(true);
   try {
-    const res = await fetch(`/api/game/${state.sessionId}/opening`, { method: 'POST' });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
-    const data = await res.json();
-    data.messages.forEach(m => addNpcMsg(m.speaker, m.content));
+    await readSSE(`/api/game/${state.sessionId}/opening`, 'POST');
     addSystemMsg('開場結束！現在輪到你提問了。用「三問法」找出騙子，或直接指控！');
     enableInput();
+    document.getElementById('auto-chat-row').style.display = 'flex';
     updateRound();
+    scheduleAutoChat();
   } catch (err) {
     addSystemMsg('開場發言失敗：' + err.message);
   } finally {
@@ -204,15 +212,26 @@ async function requestOpening() {
   }
 }
 
-async function sendMessage() {
+async function sendMessage(isAuto) {
   const input = document.getElementById('msg-input');
-  const text = input.value.trim();
-  if (!text || state.loading || state.gameOver) return;
+  if (state.loading || state.gameOver) return;
 
-  input.value = '';
-  state.round++;
-  addPlayerMsg(text);
-  updateRound();
+  let text = '';
+  if (isAuto) {
+    // 自動對話：不需要玩家輸入，送空內容讓 NPC 繼續
+    state.round++;
+    updateRound();
+  } else {
+    text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.style.height = 'auto';
+    state.round++;
+    addPlayerMsg(text);
+    updateRound();
+  }
+
+  cancelAutoChat();
 
   if (state.round >= state.maxRounds) {
     addSystemMsg('已達最大回合數！請指控你認為的騙子。');
@@ -222,15 +241,9 @@ async function sendMessage() {
   setLoading(true);
   disableInput();
   try {
-    const res = await fetch(`/api/game/${state.sessionId}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text }),
-    });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
-    const data = await res.json();
-    data.messages.forEach(m => addNpcMsg(m.speaker, m.content));
+    await readSSE(`/api/game/${state.sessionId}/chat`, 'POST', { content: text || '' });
     enableInput();
+    scheduleAutoChat();
   } catch (err) {
     addSystemMsg('回應失敗：' + err.message);
     enableInput();
@@ -255,7 +268,7 @@ async function accuseActor(index, name) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor_index: index, reason: reason || '' }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    if (!res.ok) { const text = await res.text(); throw new Error(`HTTP ${res.status}: ${text}`); }
     const data = await res.json();
     showVerdict(data);
   } catch (err) {
@@ -264,6 +277,86 @@ async function accuseActor(index, name) {
     enableInput();
   } finally {
     setLoading(false);
+  }
+}
+
+// ── SSE reader ──
+
+async function readSSE(url, method, body) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // 處理 SSE 事件：event: xxx\ndata: xxx\n\n
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop(); // 最後一段可能不完整
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventType = 'message';
+      let data = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+        else if (line.startsWith('data:')) data = line.slice(5).trim();
+      }
+      if (eventType === 'done') continue;
+      if (eventType === 'message' && data) {
+        try {
+          const msg = JSON.parse(data);
+          // 移除 loading 指示器再顯示訊息，然後重新加上
+          const loadEl = document.getElementById('loading-indicator');
+          if (loadEl) loadEl.remove();
+          addNpcMsg(msg.speaker, msg.content);
+          if (state.loading) {
+            setLoading(true); // 重新加回 loading 提示
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }
+    }
+  }
+}
+
+// ── 自動對話 ──
+
+function toggleAutoChat() {
+  state.autoChat = document.getElementById('auto-chat-toggle').checked;
+  if (state.autoChat) {
+    scheduleAutoChat();
+  } else {
+    cancelAutoChat();
+  }
+}
+
+function scheduleAutoChat() {
+  cancelAutoChat();
+  if (!state.autoChat || state.loading || state.gameOver) return;
+  state.autoChatTimer = setTimeout(() => {
+    if (state.autoChat && !state.loading && !state.gameOver) {
+      sendMessage(true);  // 自動觸發 NPC 繼續說話
+    }
+  }, 8000); // 8 秒無操作後 NPC 自動繼續
+}
+
+function cancelAutoChat() {
+  if (state.autoChatTimer) {
+    clearTimeout(state.autoChatTimer);
+    state.autoChatTimer = null;
   }
 }
 

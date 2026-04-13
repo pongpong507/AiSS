@@ -16,8 +16,8 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - MODEL=${MODEL:-qwen2.5:7b}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:22549}
+      - MODEL=${MODEL:-gemma4}
       - CONTENT_DIR=/app/content
     # 讓容器能連到 host 上的 Ollama（Linux Docker 20.10+ 需要這行）
     extra_hosts:

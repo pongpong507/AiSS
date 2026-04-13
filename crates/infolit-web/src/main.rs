@@ -9,7 +9,10 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Json},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Json,
+    },
     routing::{get, post},
     Router,
 };
@@ -24,12 +27,15 @@ use infolit_game::{
 };
 use llm_gateway::adapters::{OllamaProvider, ThinkingMode};
 use llm_gateway::provider::LlmProvider;
+use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 // ── CLI 參數 ─────────────────────────────────────────────────────────────────
@@ -97,11 +103,6 @@ struct ActorInfo {
 }
 
 #[derive(Serialize)]
-struct MessagesResponse {
-    messages: Vec<MessageInfo>,
-}
-
-#[derive(Serialize)]
 struct MessageInfo {
     speaker: String,
     content: String,
@@ -143,11 +144,17 @@ async fn health() -> impl IntoResponse {
     "ok"
 }
 
+async fn fallback(method: axum::http::Method, uri: axum::http::Uri) -> impl IntoResponse {
+    warn!("404 未匹配: {} {}", method, uri);
+    (StatusCode::NOT_FOUND, format!("404: {} {}", method, uri))
+}
+
 /// 建立新遊戲：隨機選題、組裝演員陣容
 async fn create_game(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateGameReq>,
 ) -> ApiResult<GameCreated> {
+    info!("POST /api/game — 建立新遊戲");
     let actor_count = req.actors.unwrap_or(3).min(5).max(2);
     let liar_count = req.liars.unwrap_or(1).min(actor_count - 1).max(1);
 
@@ -194,67 +201,138 @@ async fn create_game(
     }))
 }
 
-/// 開場發言：每位演員各說一輪
+/// SSE 回應型別別名
+type SseStream = Sse<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>;
+
+/// 開場發言：每位演員各說一輪（SSE 逐條推送）
 async fn opening_round(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<Uuid>,
-) -> ApiResult<MessagesResponse> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "找不到遊戲"))?;
+) -> Result<SseStream, (StatusCode, Json<serde_json::Value>)> {
+    info!("POST /api/game/{}/opening — 開場發言", session_id);
 
-    let order = session.speaking_order();
-    let mut messages = Vec::new();
-
-    for actor in &order {
-        match session.actor_respond(&actor.id, &state.model).await {
-            Ok(content) => messages.push(MessageInfo {
-                speaker: actor.name.clone(),
-                content,
-            }),
-            Err(e) => messages.push(MessageInfo {
-                speaker: "系統".into(),
-                content: format!("{} 回應失敗：{}", actor.name, e),
-            }),
+    // 先驗證 session 存在
+    {
+        let sessions = state.sessions.lock().await;
+        if !sessions.contains_key(&session_id) {
+            return Err(api_err(StatusCode::NOT_FOUND, "找不到遊戲"));
         }
     }
 
-    Ok(Json(MessagesResponse { messages }))
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+
+    tokio::spawn(async move {
+        let order = {
+            let sessions = state.sessions.lock().await;
+            let session = sessions.get(&session_id).unwrap();
+            session.speaking_order()
+        };
+
+        for actor in &order {
+            info!("  演員 {} 正在回應...", actor.name);
+            let msg = {
+                let mut sessions = state.sessions.lock().await;
+                let session = sessions.get_mut(&session_id).unwrap();
+                match session.actor_respond(&actor.id, &state.model).await {
+                    Ok(content) => {
+                        info!("  演員 {} 回應完成（{} 字）", actor.name, content.len());
+                        MessageInfo {
+                            speaker: actor.name.clone(),
+                            content,
+                        }
+                    }
+                    Err(e) => {
+                        warn!("  演員 {} 回應失敗：{}", actor.name, e);
+                        MessageInfo {
+                            speaker: "系統".into(),
+                            content: format!("{} 回應失敗：{}", actor.name, e),
+                        }
+                    }
+                }
+            };
+
+            let json = serde_json::to_string(&msg).unwrap();
+            let event = Event::default().event("message").data(json);
+            if tx.send(Ok(event)).await.is_err() {
+                break; // client disconnected
+            }
+        }
+
+        // 送出完成事件
+        let _ = tx
+            .send(Ok(Event::default().event("done").data("ok")))
+            .await;
+        info!("開場發言 SSE 完成");
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Ok(Sse::new(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>)
+        .keep_alive(KeepAlive::default()))
 }
 
-/// 玩家發言 → 所有演員回應
+/// 玩家發言 → 所有演員回應（SSE 逐條推送）
 async fn chat(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<Uuid>,
     Json(req): Json<ChatReq>,
-) -> ApiResult<MessagesResponse> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "找不到遊戲"))?;
+) -> Result<SseStream, (StatusCode, Json<serde_json::Value>)> {
+    info!(
+        "POST /api/game/{}/chat — 玩家發言：{}",
+        session_id,
+        req.content.chars().take(30).collect::<String>()
+    );
 
-    if !req.content.is_empty() {
-        session.student_says(req.content);
-    }
-
-    let order = session.speaking_order();
-    let mut messages = Vec::new();
-
-    for actor in &order {
-        match session.actor_respond(&actor.id, &state.model).await {
-            Ok(content) => messages.push(MessageInfo {
-                speaker: actor.name.clone(),
-                content,
-            }),
-            Err(e) => messages.push(MessageInfo {
-                speaker: "系統".into(),
-                content: format!("{} 回應失敗：{}", actor.name, e),
-            }),
+    // 先驗證 session 並加入學生發言
+    {
+        let mut sessions = state.sessions.lock().await;
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "找不到遊戲"))?;
+        if !req.content.is_empty() {
+            session.student_says(req.content);
         }
     }
 
-    Ok(Json(MessagesResponse { messages }))
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+
+    tokio::spawn(async move {
+        let order = {
+            let sessions = state.sessions.lock().await;
+            let session = sessions.get(&session_id).unwrap();
+            session.speaking_order()
+        };
+
+        for actor in &order {
+            let msg = {
+                let mut sessions = state.sessions.lock().await;
+                let session = sessions.get_mut(&session_id).unwrap();
+                match session.actor_respond(&actor.id, &state.model).await {
+                    Ok(content) => MessageInfo {
+                        speaker: actor.name.clone(),
+                        content,
+                    },
+                    Err(e) => MessageInfo {
+                        speaker: "系統".into(),
+                        content: format!("{} 回應失敗：{}", actor.name, e),
+                    },
+                }
+            };
+
+            let json = serde_json::to_string(&msg).unwrap();
+            let event = Event::default().event("message").data(json);
+            if tx.send(Ok(event)).await.is_err() {
+                break;
+            }
+        }
+
+        let _ = tx
+            .send(Ok(Event::default().event("done").data("ok")))
+            .await;
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Ok(Sse::new(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>)
+        .keep_alive(KeepAlive::default()))
 }
 
 /// 指控某位演員是騙子
@@ -333,10 +411,11 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index_page))
         .route("/api/health", get(health))
-        .route("/api/game", post(create_game))
-        .route("/api/game/{id}/opening", post(opening_round))
-        .route("/api/game/{id}/chat", post(chat))
-        .route("/api/game/{id}/accuse", post(accuse))
+        .route("/api/game/new", post(create_game))
+        .route("/api/game/:id/opening", post(opening_round))
+        .route("/api/game/:id/chat", post(chat))
+        .route("/api/game/:id/accuse", post(accuse))
+        .fallback(fallback)
         .with_state(state);
 
     let addr = format!("{}:{}", args.host, args.port);

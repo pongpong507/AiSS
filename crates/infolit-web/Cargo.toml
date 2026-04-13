@@ -21,3 +21,5 @@ uuid = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
