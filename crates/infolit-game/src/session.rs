@@ -82,7 +82,7 @@ impl GameSession {
    激光請說雷射、優化請說最佳化、高清請說高畫質、鏈接請說連結、
    質量請說品質、默認請說預設、回復請說回覆。
 3. 語氣符合你的說話風格。
-4. 【字數嚴格限制】每次回應最多 18 個中文字（含標點），絕對不能超過。像真人傳訊息那樣簡短、口語、直接。
+4. 【字數嚴格限制】每次回應最多 25 個中文字（含標點），絕對不能超過。像真人傳訊息那樣簡短、口語、直接。
 5. 不要解釋太多、不要列清單、不要用『首先、其次』等連接詞，就一兩句話說完。
 6. 回答對象是小學四到六年級學生，請用他們聽得懂的簡單詞彙。",
             name = actor.name,
@@ -153,7 +153,7 @@ impl GameSession {
         let messages = self.build_messages_for_actor(&actor);
         let req = ChatRequest::new(model, messages)
             .with_temperature(0.8)
-            .with_max_tokens(80);
+            .with_max_tokens(120);
 
         // Pacing 延遲（模擬真實對話節奏）
         let delay = self.pacing.random_response_delay();
@@ -161,7 +161,7 @@ impl GameSession {
         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
 
         let response = self.provider.chat(req).await?;
-        let trimmed = truncate_chars(&response.content, 18);
+        let trimmed = truncate_chars(&response.content, 25);
 
         let turn = ChatTurn {
             speaker_id: actor_id.to_string(),

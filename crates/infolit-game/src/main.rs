@@ -199,7 +199,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 組裝本局陣容 ──────────────────────────────────────────────────────────
     let (selected_actors, liar_ids, deceptions) =
-        assemble_session(&actors, &catalog, args.actors, args.liars)?;
+        assemble_session(&actors, &catalog, args.actors, args.liars, &[])?;
 
     // 從題庫載入並隨機選題
     let topics_dir = args.content_dir.join("topics");

@@ -12,7 +12,8 @@ pub type AssembledSession = (Vec<Actor>, Vec<String>, HashMap<String, DeceptionP
 
 /// 從演員池中組裝一局遊戲的陣容
 ///
-/// - 從 `actors` 中隨機抽 `actor_count` 個演員
+/// - 從 `actors` 中加權抽 `actor_count` 個演員；`recent_actor_ids` 中的演員
+///   權重降低（不完全排除，確保小池子仍可抽得出），藉此減少連續對局的重複率
 /// - 指派其中 `liar_count` 個為騙子
 /// - 為每個騙子依 affinity 加權挑選騙術（15% 完全隨機例外）
 pub fn assemble_session(
@@ -20,6 +21,7 @@ pub fn assemble_session(
     catalog: &[DeceptionPattern],
     actor_count: usize,
     liar_count: usize,
+    recent_actor_ids: &[String],
 ) -> anyhow::Result<AssembledSession> {
     if actors.len() < actor_count {
         anyhow::bail!("演員池不足：需要 {}，實際只有 {}", actor_count, actors.len());
@@ -33,10 +35,21 @@ pub fn assemble_session(
 
     let mut rng = thread_rng();
 
-    // 隨機抽演員
-    let mut selected: Vec<Actor> = actors.to_vec();
-    selected.shuffle(&mut rng);
-    let selected = selected[..actor_count].to_vec();
+    // 加權不放回抽樣：最近出場過的演員權重降為 0.15，其他為 1.0
+    let recent: std::collections::HashSet<&str> =
+        recent_actor_ids.iter().map(|s| s.as_str()).collect();
+    let mut pool: Vec<Actor> = actors.to_vec();
+    let mut selected: Vec<Actor> = Vec::with_capacity(actor_count);
+    for _ in 0..actor_count {
+        let weights: Vec<f64> = pool
+            .iter()
+            .map(|a| if recent.contains(a.id.as_str()) { 0.15 } else { 1.0 })
+            .collect();
+        let dist = rand::distributions::WeightedIndex::new(&weights)
+            .expect("pool 不能為空");
+        let idx = dist.sample(&mut rng);
+        selected.push(pool.remove(idx));
+    }
 
     // 隨機指定騙子（從 selected 中隨機挑，而非固定取前 N 個）
     let mut liar_candidates: Vec<usize> = (0..actor_count).collect();
@@ -118,7 +131,7 @@ mod tests {
         let actors: Vec<Actor> = (0..5).map(|i| make_actor(&format!("a{i}"), (i as u8 * 2) + 1)).collect();
         let catalog: Vec<DeceptionPattern> = (0..3).map(|i| make_deception(&format!("d{i}"), (i as u8 * 3) + 3)).collect();
 
-        let (selected, liars, deceptions) = assemble_session(&actors, &catalog, 3, 1).unwrap();
+        let (selected, liars, deceptions) = assemble_session(&actors, &catalog, 3, 1, &[]).unwrap();
         assert_eq!(selected.len(), 3);
         assert_eq!(liars.len(), 1);
         assert_eq!(deceptions.len(), 1);
@@ -129,7 +142,7 @@ mod tests {
     fn assemble_fails_when_pool_too_small() {
         let actors = vec![make_actor("a1", 5)];
         let catalog = vec![make_deception("d1", 5)];
-        let result = assemble_session(&actors, &catalog, 3, 1);
+        let result = assemble_session(&actors, &catalog, 3, 1, &[]);
         assert!(result.is_err());
     }
 
@@ -137,7 +150,7 @@ mod tests {
     fn assemble_fails_when_liars_exceed_actors() {
         let actors: Vec<Actor> = (0..3).map(|i| make_actor(&format!("a{i}"), 5)).collect();
         let catalog = vec![make_deception("d1", 5)];
-        let result = assemble_session(&actors, &catalog, 3, 5);
+        let result = assemble_session(&actors, &catalog, 3, 5, &[]);
         assert!(result.is_err());
     }
 
@@ -145,7 +158,7 @@ mod tests {
     fn assemble_fails_when_catalog_empty() {
         let actors: Vec<Actor> = (0..3).map(|i| make_actor(&format!("a{i}"), 5)).collect();
         let catalog: Vec<DeceptionPattern> = vec![];
-        let result = assemble_session(&actors, &catalog, 3, 1);
+        let result = assemble_session(&actors, &catalog, 3, 1, &[]);
         assert!(result.is_err());
     }
 
@@ -154,7 +167,7 @@ mod tests {
         let actors: Vec<Actor> = (0..3).map(|i| make_actor(&format!("a{i}"), 5)).collect();
         let catalog = vec![make_deception("d1", 5)];
         let (selected, liars, deceptions) =
-            assemble_session(&actors, &catalog, 3, 0).unwrap();
+            assemble_session(&actors, &catalog, 3, 0, &[]).unwrap();
         assert_eq!(selected.len(), 3);
         assert_eq!(liars.len(), 0);
         assert_eq!(deceptions.len(), 0);
@@ -165,7 +178,7 @@ mod tests {
         let actors: Vec<Actor> = (0..3).map(|i| make_actor(&format!("a{i}"), 5)).collect();
         let catalog = vec![make_deception("d1", 5), make_deception("d2", 6)];
         let (selected, liars, deceptions) =
-            assemble_session(&actors, &catalog, 3, 3).unwrap();
+            assemble_session(&actors, &catalog, 3, 3, &[]).unwrap();
         assert_eq!(selected.len(), 3);
         assert_eq!(liars.len(), 3);
         assert_eq!(deceptions.len(), 3);
@@ -234,7 +247,7 @@ mod tests {
 
         let mut liar_is_first_count = 0;
         for _ in 0..100 {
-            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1).unwrap();
+            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1, &[]).unwrap();
             // 騙子 ID 是否等於 selected 陣列的第一個演員 ID
             if liars[0] == selected[0].id {
                 liar_is_first_count += 1;
@@ -259,7 +272,7 @@ mod tests {
 
         let mut positions = std::collections::HashSet::new();
         for _ in 0..50 {
-            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1).unwrap();
+            let (selected, liars, _) = assemble_session(&actors, &catalog, 3, 1, &[]).unwrap();
             let pos = selected.iter().position(|a| a.id == liars[0]).unwrap();
             positions.insert(pos);
         }
@@ -269,5 +282,50 @@ mod tests {
             "騙子位置只出現在 {:?}，缺乏隨機性",
             positions
         );
+    }
+
+    #[test]
+    fn recent_actors_are_picked_less_often() {
+        // 10 位演員，其中 3 位標為最近出場過，跑 200 次抽 3 人
+        // 最近出場的演員出現率應明顯低於其他演員
+        let actors: Vec<Actor> = (0..10)
+            .map(|i| make_actor(&format!("a{i}"), (i as u8) + 1))
+            .collect();
+        let catalog = vec![make_deception("d1", 5)];
+        let recent = vec!["a0".to_string(), "a1".to_string(), "a2".to_string()];
+
+        let mut recent_picks = 0;
+        let mut other_picks = 0;
+        for _ in 0..200 {
+            let (selected, _, _) =
+                assemble_session(&actors, &catalog, 3, 1, &recent).unwrap();
+            for a in &selected {
+                if recent.contains(&a.id) {
+                    recent_picks += 1;
+                } else {
+                    other_picks += 1;
+                }
+            }
+        }
+        // 若權重生效，recent 三位的出場率應明顯低於其他 7 位
+        // 均等時 recent:other ≈ 3:7 ≈ 0.43；有權重後應低於 0.2
+        let ratio = recent_picks as f64 / other_picks as f64;
+        assert!(
+            ratio < 0.25,
+            "最近出場演員仍頻繁被抽中：recent={}, other={}, ratio={:.2}",
+            recent_picks, other_picks, ratio
+        );
+    }
+
+    #[test]
+    fn recent_list_does_not_break_small_pool() {
+        // 演員池正好等於需要數，即使全部都在 recent 也要能抽出
+        let actors: Vec<Actor> = (0..3).map(|i| make_actor(&format!("a{i}"), 5)).collect();
+        let catalog = vec![make_deception("d1", 5)];
+        let recent = vec!["a0".to_string(), "a1".to_string(), "a2".to_string()];
+
+        let (selected, _, _) =
+            assemble_session(&actors, &catalog, 3, 1, &recent).unwrap();
+        assert_eq!(selected.len(), 3);
     }
 }

@@ -29,12 +29,15 @@ use llm_gateway::adapters::{OllamaProvider, ThinkingMode};
 use llm_gateway::provider::LlmProvider;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// 最近出場演員名單的保留長度（約 2 局 × 3 人）
+const RECENT_ACTOR_CAPACITY: usize = 6;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -74,6 +77,8 @@ struct AppState {
     sessions: Mutex<HashMap<Uuid, GameSession>>,
     /// 玩家訊息緩衝區（獨立鎖，不與 session 競爭）
     pending_messages: Mutex<HashMap<Uuid, Vec<String>>>,
+    /// 最近幾局用過的演員 id，供 selector 降權以減少重複
+    recent_actor_ids: Mutex<VecDeque<String>>,
     actors: Vec<infolit_game::actor::Actor>,
     catalog: Vec<infolit_game::deception::DeceptionPattern>,
     topics: Vec<shared_types::Topic>,
@@ -162,9 +167,31 @@ async fn create_game(
     let actor_count = req.actors.unwrap_or(3).min(5).max(2);
     let liar_count = req.liars.unwrap_or(1).min(actor_count - 1).max(1);
 
+    let recent_snapshot: Vec<String> = {
+        let recent = state.recent_actor_ids.lock().await;
+        recent.iter().cloned().collect()
+    };
+
     let (selected, liar_ids, deceptions) =
-        assemble_session(&state.actors, &state.catalog, actor_count, liar_count)
-            .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+        assemble_session(
+            &state.actors,
+            &state.catalog,
+            actor_count,
+            liar_count,
+            &recent_snapshot,
+        )
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // 記錄本局演員到 recent，供下一局降權
+    {
+        let mut recent = state.recent_actor_ids.lock().await;
+        for a in &selected {
+            recent.push_back(a.id.clone());
+        }
+        while recent.len() > RECENT_ACTOR_CAPACITY {
+            recent.pop_front();
+        }
+    }
 
     let topic = state.topics[rand::random::<usize>() % state.topics.len()].clone();
 
@@ -459,6 +486,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         sessions: Mutex::new(HashMap::new()),
         pending_messages: Mutex::new(HashMap::new()),
+        recent_actor_ids: Mutex::new(VecDeque::with_capacity(RECENT_ACTOR_CAPACITY)),
         actors,
         catalog,
         topics,
