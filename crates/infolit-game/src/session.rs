@@ -81,7 +81,10 @@ impl GameSession {
    視頻請說影片、信息請說資訊、軟件請說軟體、網絡請說網路、
    激光請說雷射、優化請說最佳化、高清請說高畫質、鏈接請說連結、
    質量請說品質、默認請說預設、回復請說回覆。
-3. 語氣符合你的說話風格，每次回應請簡短（2-4 句話）。",
+3. 語氣符合你的說話風格。
+4. 【字數嚴格限制】每次回應最多 18 個中文字（含標點），絕對不能超過。像真人傳訊息那樣簡短、口語、直接。
+5. 不要解釋太多、不要列清單、不要用『首先、其次』等連接詞，就一兩句話說完。
+6. 回答對象是小學四到六年級學生，請用他們聽得懂的簡單詞彙。",
             name = actor.name,
             bio = actor.short_bio,
             style = actor.speech_style,
@@ -150,7 +153,7 @@ impl GameSession {
         let messages = self.build_messages_for_actor(&actor);
         let req = ChatRequest::new(model, messages)
             .with_temperature(0.8)
-            .with_max_tokens(300);
+            .with_max_tokens(80);
 
         // Pacing 延遲（模擬真實對話節奏）
         let delay = self.pacing.random_response_delay();
@@ -158,17 +161,18 @@ impl GameSession {
         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
 
         let response = self.provider.chat(req).await?;
+        let trimmed = truncate_chars(&response.content, 18);
 
         let turn = ChatTurn {
             speaker_id: actor_id.to_string(),
             speaker_name: actor.name.clone(),
-            content: response.content.clone(),
+            content: trimmed.clone(),
             is_liar: self.liar_ids.contains(&actor_id.to_string()),
         };
         self.transcript.push(turn);
 
         info!(actor = %actor.name, "responded");
-        Ok(response.content)
+        Ok(trimmed)
     }
 
     /// 計算本輪發言順序（依 eagerness 加權隨機排序）
@@ -226,42 +230,83 @@ impl GameSession {
         });
     }
 
-    /// 評分：學生指出的騙子 ID 是否正確
+    /// 評分：學生指出的騙子 ID 是否正確（單人版，保留向下相容）
     pub fn score(&self, accused_id: &str, reason: &str) -> (Verdict, String) {
-        let is_correct = self.liar_ids.contains(&accused_id.to_string());
+        self.score_multi(&[accused_id.to_string()], reason)
+    }
+
+    /// 評分：學生指出多個騙子 ID 是否正確
+    pub fn score_multi(&self, accused_ids: &[String], reason: &str) -> (Verdict, String) {
         let deception_hints: Vec<String> = self.liar_ids.iter()
             .filter_map(|id| self.deceptions.get(id))
             .map(|d| format!("「{}」（{}）", d.name_zh, d.teaching_goal))
             .collect();
 
-        if is_correct {
-            let verdict = if reason.len() > 20 {
+        let liar_set: std::collections::HashSet<&str> = self.liar_ids.iter().map(|s| s.as_str()).collect();
+        let accused_set: std::collections::HashSet<&str> = accused_ids.iter().map(|s| s.as_str()).collect();
+
+        let correct_picks: Vec<&str> = accused_set.intersection(&liar_set).copied().collect();
+        let wrong_picks: Vec<&str> = accused_set.difference(&liar_set).copied().collect();
+        let missed: Vec<&str> = liar_set.difference(&accused_set).copied().collect();
+
+        let liar_names: Vec<&str> = self.liar_ids.iter()
+            .filter_map(|id| self.actors.iter().find(|a| &a.id == id))
+            .map(|a| a.name.as_str())
+            .collect();
+
+        if wrong_picks.is_empty() && missed.is_empty() {
+            // 完全正確：找到所有騙子，沒有誤指
+            let verdict = if reason.chars().count() > 10 {
                 Verdict::Green
             } else {
                 Verdict::Yellow
             };
             let feedback = match &verdict {
-                Verdict::Green => format!("🟢 答對了！你找出了騙子，理由也很清楚。\n學習重點：{}", deception_hints.join("；")),
-                Verdict::Yellow => format!("🟡 答對了！但理由可以更具體。試著說明哪個地方讓你覺得可疑？\n學習重點：{}", deception_hints.join("；")),
+                Verdict::Green => format!(
+                    "🟢 全部答對！你找出了所有騙子（{}），理由也很清楚。\n學習重點：{}",
+                    liar_names.join("、"), deception_hints.join("；")
+                ),
+                Verdict::Yellow => format!(
+                    "🟡 全部答對！但理由可以更具體。試著說明哪個地方讓你覺得可疑？\n學習重點：{}",
+                    deception_hints.join("；")
+                ),
                 _ => unreachable!(),
             };
             (verdict, feedback)
-        } else {
-            let accused_name = self.actors.iter()
-                .find(|a| a.id == accused_id)
-                .map(|a| a.name.as_str())
-                .unwrap_or("（未知）");
-            let liar_names: Vec<&str> = self.liar_ids.iter()
-                .filter_map(|id| self.actors.iter().find(|a| &a.id == id))
+        } else if !correct_picks.is_empty() && wrong_picks.is_empty() {
+            // 部分正確：找到一些騙子但漏掉了一些，沒有誤指
+            let missed_names: Vec<&str> = missed.iter()
+                .filter_map(|id| self.actors.iter().find(|a| a.id == *id))
                 .map(|a| a.name.as_str())
                 .collect();
             let feedback = format!(
-                "🔴 答錯了。「{}」其實是誠實的喔！\n試著用「三問法」追問：誰說的？何時發布的？合不合理？\n提示：真正的騙子是 {}",
-                accused_name,
+                "🟡 找對了一部分！但還漏掉了：{}\n試著用「三問法」追問看看其他人。\n學習重點：{}",
+                missed_names.join("、"), deception_hints.join("；")
+            );
+            (Verdict::Yellow, feedback)
+        } else {
+            // 有誤指：指控了無辜的人
+            let wrong_names: Vec<&str> = wrong_picks.iter()
+                .filter_map(|id| self.actors.iter().find(|a| a.id == *id))
+                .map(|a| a.name.as_str())
+                .collect();
+            let feedback = format!(
+                "🔴 判斷有誤。「{}」其實是誠實的喔！\n真正的騙子是：{}\n試著用「三問法」追問：誰說的？何時發布的？合不合理？",
+                wrong_names.join("、"),
                 liar_names.join("、"),
             );
             (Verdict::Red, feedback)
         }
+    }
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let trimmed = s.trim();
+    let count = trimmed.chars().count();
+    if count <= max_chars {
+        trimmed.to_string()
+    } else {
+        trimmed.chars().take(max_chars).collect()
     }
 }
 

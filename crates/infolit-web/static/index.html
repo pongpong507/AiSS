@@ -24,12 +24,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 /* ── Game ── */
 #game { display: none; max-width: 720px; margin: 0 auto; height: 100vh; display: none; flex-direction: column; }
-.game-header { background: #1a237e; color: #fff; padding: 16px 20px; }
+.game-header { background: #1a237e; color: #fff; padding: 16px 20px; position: relative; }
 .game-header h2 { font-size: 1rem; font-weight: 400; opacity: .8; margin-bottom: 4px; }
 .game-header .topic { font-size: 1.15rem; font-weight: 700; }
 .actors-bar { display: flex; gap: 8px; padding: 10px 20px; background: #fff; border-bottom: 1px solid #e0e0e0; flex-wrap: wrap; }
 .actor-chip { padding: 4px 12px; border-radius: 20px; font-size: .85rem; font-weight: 600; color: #fff; }
-.round-info { text-align: center; padding: 6px; font-size: .8rem; color: #888; background: #fafafa; }
+.round-info { display: flex; justify-content: space-between; align-items: center; padding: 6px 20px; font-size: .8rem; color: #888; background: #fafafa; }
+#auto-chat-indicator { display: none; color: #4caf50; font-weight: 600; font-size: .8rem; animation: pulse 2s infinite; }
+#auto-chat-indicator.active { display: flex; align-items: center; gap: 4px; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
 #chat-area { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
 .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; font-size: .95rem; word-break: break-word; }
 .msg .speaker { font-weight: 700; font-size: .85rem; margin-bottom: 2px; }
@@ -38,7 +41,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .msg-system { align-self: center; background: #fff3cd; color: #856404; font-size: .85rem; border-radius: 8px; text-align: center; }
 .msg-verdict { align-self: center; background: #fff; border-radius: 12px; padding: 20px; text-align: center; max-width: 95%; box-shadow: 0 2px 12px rgba(0,0,0,.1); }
 .msg-verdict .verdict-icon { font-size: 3rem; margin-bottom: 8px; }
-.msg-verdict .verdict-text { font-size: 1rem; line-height: 1.6; margin-bottom: 12px; }
+.msg-verdict .verdict-text { font-size: 1rem; line-height: 1.6; margin-bottom: 12px; white-space: pre-line; }
 .msg-verdict .correct-answer { background: #e8f5e9; padding: 10px; border-radius: 8px; font-size: .9rem; margin-top: 8px; }
 .loading-dots { align-self: flex-start; padding: 12px 18px; background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; }
 .loading-dots span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #999; margin: 0 2px; animation: bounce .6s infinite alternate; }
@@ -51,12 +54,47 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #msg-input:focus { border-color: #4361ee; }
 #send-btn { padding: 10px 20px; border: none; border-radius: 10px; background: #4361ee; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
 #send-btn:disabled { background: #aaa; }
-#accuse-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-#accuse-row .label { font-size: .85rem; color: #888; }
-.accuse-btn { padding: 6px 14px; border: 2px solid #e74c3c; border-radius: 8px; background: #fff; color: #e74c3c; font-size: .85rem; font-weight: 600; cursor: pointer; transition: all .15s; }
-.accuse-btn:hover { background: #e74c3c; color: #fff; }
-.accuse-btn:disabled { opacity: .4; cursor: not-allowed; }
+#bottom-row { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+#accuse-btn { padding: 8px 18px; border: 2px solid #e74c3c; border-radius: 8px; background: #fff; color: #e74c3c; font-size: .9rem; font-weight: 600; cursor: pointer; transition: all .15s; }
+#accuse-btn:hover { background: #e74c3c; color: #fff; }
+#accuse-btn:disabled { opacity: .4; cursor: not-allowed; }
 #new-game-btn { display: none; width: 100%; padding: 12px; margin-top: 8px; border: none; border-radius: 10px; background: #4361ee; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+
+/* ── Toggle Switch ── */
+.toggle-wrap { display: flex; align-items: center; gap: 8px; }
+.toggle-label { font-size: .85rem; color: #555; cursor: pointer; user-select: none; }
+.toggle-switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-track { position: absolute; inset: 0; background: #ccc; border-radius: 12px; transition: background .2s; cursor: pointer; }
+.toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.toggle-switch input:checked + .toggle-track { background: #4caf50; }
+.toggle-switch input:checked + .toggle-track::after { transform: translateX(20px); }
+
+/* ── Accuse Modal ── */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.45); z-index: 100; justify-content: center; align-items: center; }
+.modal-overlay.show { display: flex; }
+.modal-box { background: #fff; border-radius: 16px; padding: 28px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,.2); animation: modalIn .2s ease-out; }
+@keyframes modalIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.modal-box h3 { font-size: 1.15rem; margin-bottom: 16px; color: #1a1a2e; }
+.modal-box .hint { font-size: .85rem; color: #888; margin-bottom: 12px; }
+.modal-actors { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.modal-actor-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 10px; cursor: pointer; transition: all .15s; user-select: none; }
+.modal-actor-item:hover { border-color: #e74c3c; background: #fff5f5; }
+.modal-actor-item.selected { border-color: #e74c3c; background: #fde8e8; }
+.modal-actor-item .actor-check { width: 22px; height: 22px; border: 2px solid #ccc; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .15s; font-size: .85rem; }
+.modal-actor-item.selected .actor-check { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+.modal-actor-name { font-weight: 600; font-size: .95rem; }
+.modal-actor-bio { font-size: .8rem; color: #888; }
+.modal-reason { width: 100%; min-height: 80px; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: .95rem; font-family: inherit; resize: vertical; outline: none; transition: border-color .15s; line-height: 1.5; }
+.modal-reason:focus { border-color: #4361ee; }
+.modal-reason-label { font-size: .9rem; font-weight: 600; margin-bottom: 6px; color: #333; }
+.modal-btns { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
+.modal-btn { padding: 10px 24px; border: none; border-radius: 10px; font-size: .95rem; font-weight: 600; cursor: pointer; transition: background .15s; }
+.modal-btn-cancel { background: #f0f0f0; color: #666; }
+.modal-btn-cancel:hover { background: #e0e0e0; }
+.modal-btn-submit { background: #e74c3c; color: #fff; }
+.modal-btn-submit:hover { background: #c0392b; }
+.modal-btn-submit:disabled { background: #ccc; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -93,25 +131,47 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <div class="topic" id="topic-text"></div>
   </div>
   <div class="actors-bar" id="actors-bar"></div>
-  <div class="round-info" id="round-info">開場發言中...</div>
+  <div class="round-info">
+    <span id="round-text">開場發言中...</span>
+    <span id="auto-chat-indicator"><span>&#9679;</span> 持續對話中</span>
+  </div>
   <div id="chat-area"></div>
   <div id="input-area">
     <div id="input-row">
-      <textarea id="msg-input" rows="1" placeholder="輸入你想說的話..." disabled
+      <textarea id="msg-input" rows="1" placeholder="輸入你想說的話..."
              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"
              oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px';"></textarea>
-      <button id="send-btn" onclick="sendMessage()" disabled>送出</button>
+      <button id="send-btn" onclick="sendMessage()">送出</button>
     </div>
-    <div id="accuse-row">
-      <span class="label">指控騙子：</span>
-    </div>
-    <div id="auto-chat-row" style="display:none; margin-top:8px; align-items:center; gap:8px;">
-      <label style="font-size:.85rem; color:#555; display:flex; align-items:center; gap:6px; cursor:pointer;">
-        <input type="checkbox" id="auto-chat-toggle" onchange="toggleAutoChat()">
-        NPC 持續對話（你不說話時 NPC 也會繼續討論）
-      </label>
+    <div id="bottom-row">
+      <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <button id="accuse-btn" onclick="openAccuseModal()">指控騙子</button>
+        <span id="liar-hint" style="font-size:.8rem; color:#888;"></span>
+      </div>
+      <div class="toggle-wrap" id="auto-chat-wrap" style="display:none;">
+        <label class="toggle-switch">
+          <input type="checkbox" id="auto-chat-toggle" onchange="toggleAutoChat()">
+          <span class="toggle-track"></span>
+        </label>
+        <span class="toggle-label" onclick="document.getElementById('auto-chat-toggle').click()">NPC 持續對話</span>
+      </div>
     </div>
     <button id="new-game-btn" onclick="location.reload()">再玩一局</button>
+  </div>
+</div>
+
+<!-- ── Accuse Modal ── -->
+<div class="modal-overlay" id="accuse-modal">
+  <div class="modal-box">
+    <h3>指控騙子</h3>
+    <div class="hint" id="modal-hint">選擇你認為在說謊的人</div>
+    <div class="modal-actors" id="modal-actors"></div>
+    <div class="modal-reason-label">指控理由</div>
+    <textarea class="modal-reason" id="modal-reason" placeholder="說明為什麼你覺得他們在說謊...&#10;例如：他引用的研究查不到、數據和實際不符..."></textarea>
+    <div class="modal-btns">
+      <button class="modal-btn modal-btn-cancel" onclick="closeAccuseModal()">取消</button>
+      <button class="modal-btn modal-btn-submit" id="modal-submit" onclick="submitAccuse()" disabled>提交指控</button>
+    </div>
   </div>
 </div>
 
@@ -124,12 +184,16 @@ let state = {
   topic: '',
   round: 0,
   maxRounds: 10,
-  loading: false,
   gameOver: false,
   diffActors: 3,
   diffLiars: 1,
+  liarCount: 1,
   autoChat: false,
   autoChatTimer: null,
+  accuseSelected: new Set(),
+  // 訊息佇列與 NPC 回應狀態
+  msgQueue: [],       // 待送出的玩家訊息
+  npcBusy: false,     // NPC 是否正在回應中
 };
 
 function selectDiff(btn) {
@@ -156,12 +220,14 @@ async function startGame() {
     state.sessionId = data.session_id;
     state.topic = data.topic;
     state.actors = data.actors;
+    state.liarCount = data.liar_count || 1;
 
     document.getElementById('lobby').style.display = 'none';
     const game = document.getElementById('game');
     game.style.display = 'flex';
 
     document.getElementById('topic-text').textContent = data.topic;
+    document.getElementById('liar-hint').textContent = `（本局有 ${state.liarCount} 位騙子）`;
 
     // Actor chips
     const bar = document.getElementById('actors-bar');
@@ -175,18 +241,6 @@ async function startGame() {
       bar.appendChild(chip);
     });
 
-    // Accuse buttons
-    const accuseRow = document.getElementById('accuse-row');
-    accuseRow.innerHTML = '<span class="label">指控騙子：</span>';
-    data.actors.forEach((a, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'accuse-btn';
-      btn.textContent = `${a.index}. ${a.name}`;
-      btn.disabled = true;
-      btn.onclick = () => accuseActor(a.index, a.name);
-      accuseRow.appendChild(btn);
-    });
-
     addSystemMsg('遊戲開始！各位成員正在開場發言...');
     await requestOpening();
   } catch (err) {
@@ -198,75 +252,153 @@ async function startGame() {
 
 async function requestOpening() {
   setLoading(true);
+  state.npcBusy = true;
   try {
     await readSSE(`/api/game/${state.sessionId}/opening`, 'POST');
     addSystemMsg('開場結束！現在輪到你提問了。用「三問法」找出騙子，或直接指控！');
-    enableInput();
-    document.getElementById('auto-chat-row').style.display = 'flex';
+    document.getElementById('auto-chat-wrap').style.display = 'flex';
     updateRound();
-    scheduleAutoChat();
   } catch (err) {
     addSystemMsg('開場發言失敗：' + err.message);
   } finally {
     setLoading(false);
+    state.npcBusy = false;
+    onNpcRoundDone();
   }
 }
 
-async function sendMessage(isAuto) {
+// ── 玩家發言（永不封鎖輸入框）──
+
+async function sendMessage() {
   const input = document.getElementById('msg-input');
-  if (state.loading || state.gameOver) return;
+  const text = input.value.trim();
+  if (!text || state.gameOver) return;
 
-  let text = '';
-  if (isAuto) {
-    // 自動對話：不需要玩家輸入，送空內容讓 NPC 繼續
-    state.round++;
-    updateRound();
-  } else {
-    text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    input.style.height = 'auto';
-    state.round++;
-    addPlayerMsg(text);
-    updateRound();
-  }
+  input.value = '';
+  input.style.height = 'auto';
 
+  // 立刻顯示在畫面上
+  addPlayerMsg(text);
+
+  // 送到伺服器緩衝（不等 LLM，瞬間回應）
+  fetch(`/api/game/${state.sessionId}/say`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text }),
+  }).catch(() => {}); // fire and forget
+
+  state.msgQueue.push(text);
   cancelAutoChat();
+
+  // 如果 NPC 不忙，馬上觸發回應
+  if (!state.npcBusy) {
+    triggerNpcRound();
+  }
+  // 如果 NPC 正忙，訊息已緩衝在伺服器，等這輪結束後會自動觸發下一輪
+}
+
+// NPC 一輪回應完後的回呼
+function onNpcRoundDone() {
+  // 有在 NPC 回應期間送來的新訊息 → 再跑一輪
+  if (state.msgQueue.length > 0 && !state.gameOver) {
+    triggerNpcRound();
+  } else {
+    scheduleAutoChat();
+  }
+}
+
+async function triggerNpcRound() {
+  if (state.npcBusy || state.gameOver) return;
+
+  state.msgQueue = []; // 清空佇列（伺服器已有這些訊息）
+  state.round++;
+  updateRound();
 
   if (state.round >= state.maxRounds) {
     addSystemMsg('已達最大回合數！請指控你認為的騙子。');
     return;
   }
 
+  state.npcBusy = true;
   setLoading(true);
-  disableInput();
+  cancelAutoChat();
+
   try {
-    await readSSE(`/api/game/${state.sessionId}/chat`, 'POST', { content: text || '' });
-    enableInput();
-    scheduleAutoChat();
+    await readSSE(`/api/game/${state.sessionId}/respond`, 'POST');
   } catch (err) {
     addSystemMsg('回應失敗：' + err.message);
-    enableInput();
   } finally {
     setLoading(false);
+    state.npcBusy = false;
+    onNpcRoundDone();
   }
 }
 
-async function accuseActor(index, name) {
-  if (state.loading || state.gameOver) return;
+// ── 指控 Modal ──
 
-  const reason = prompt(`你認為「${name}」是騙子，請說明理由：`);
-  if (reason === null) return;
+function openAccuseModal() {
+  if (state.gameOver) return;
+  cancelAutoChat();
 
+  state.accuseSelected = new Set();
+  const container = document.getElementById('modal-actors');
+  container.innerHTML = '';
+  document.getElementById('modal-hint').textContent =
+    `選擇你認為在說謊的人（本局有 ${state.liarCount} 位騙子）`;
+
+  state.actors.forEach((a, i) => {
+    const item = document.createElement('div');
+    item.className = 'modal-actor-item';
+    item.dataset.index = a.index;
+    item.innerHTML = `
+      <div class="actor-check"></div>
+      <div>
+        <div class="modal-actor-name" style="color:${COLORS[i % COLORS.length]}">${a.index}. ${a.name}</div>
+        <div class="modal-actor-bio">${escHtml(a.short_bio)}</div>
+      </div>`;
+    item.onclick = () => toggleAccuseSelect(item, a.index);
+    container.appendChild(item);
+  });
+
+  document.getElementById('modal-reason').value = '';
+  document.getElementById('modal-submit').disabled = true;
+  document.getElementById('accuse-modal').classList.add('show');
+  document.getElementById('modal-reason').focus();
+}
+
+function closeAccuseModal() {
+  document.getElementById('accuse-modal').classList.remove('show');
+  scheduleAutoChat();
+}
+
+function toggleAccuseSelect(item, index) {
+  if (state.accuseSelected.has(index)) {
+    state.accuseSelected.delete(index);
+    item.classList.remove('selected');
+    item.querySelector('.actor-check').textContent = '';
+  } else {
+    state.accuseSelected.add(index);
+    item.classList.add('selected');
+    item.querySelector('.actor-check').textContent = '\u2713';
+  }
+  document.getElementById('modal-submit').disabled = state.accuseSelected.size === 0;
+}
+
+async function submitAccuse() {
+  if (state.accuseSelected.size === 0) return;
+
+  const reason = document.getElementById('modal-reason').value.trim();
+  const indices = [...state.accuseSelected];
+
+  closeAccuseModal();
   state.gameOver = true;
-  disableInput();
   setLoading(true);
 
   try {
     const res = await fetch(`/api/game/${state.sessionId}/accuse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actor_index: index, reason: reason || '' }),
+      body: JSON.stringify({ actor_indices: indices, reason: reason }),
     });
     if (!res.ok) { const text = await res.text(); throw new Error(`HTTP ${res.status}: ${text}`); }
     const data = await res.json();
@@ -274,7 +406,6 @@ async function accuseActor(index, name) {
   } catch (err) {
     addSystemMsg('指控失敗：' + err.message);
     state.gameOver = false;
-    enableInput();
   } finally {
     setLoading(false);
   }
@@ -303,9 +434,8 @@ async function readSSE(url, method, body) {
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // 處理 SSE 事件：event: xxx\ndata: xxx\n\n
     const parts = buffer.split('\n\n');
-    buffer = parts.pop(); // 最後一段可能不完整
+    buffer = parts.pop();
 
     for (const part of parts) {
       if (!part.trim()) continue;
@@ -319,14 +449,11 @@ async function readSSE(url, method, body) {
       if (eventType === 'message' && data) {
         try {
           const msg = JSON.parse(data);
-          // 移除 loading 指示器再顯示訊息，然後重新加上
           const loadEl = document.getElementById('loading-indicator');
           if (loadEl) loadEl.remove();
           addNpcMsg(msg.speaker, msg.content);
-          if (state.loading) {
-            setLoading(true); // 重新加回 loading 提示
-          }
-        } catch (e) { /* ignore parse errors */ }
+          if (state.npcBusy) setLoading(true);
+        } catch (e) { /* ignore */ }
       }
     }
   }
@@ -336,21 +463,24 @@ async function readSSE(url, method, body) {
 
 function toggleAutoChat() {
   state.autoChat = document.getElementById('auto-chat-toggle').checked;
+  const indicator = document.getElementById('auto-chat-indicator');
   if (state.autoChat) {
+    indicator.classList.add('active');
     scheduleAutoChat();
   } else {
+    indicator.classList.remove('active');
     cancelAutoChat();
   }
 }
 
 function scheduleAutoChat() {
   cancelAutoChat();
-  if (!state.autoChat || state.loading || state.gameOver) return;
+  if (!state.autoChat || state.npcBusy || state.gameOver) return;
   state.autoChatTimer = setTimeout(() => {
-    if (state.autoChat && !state.loading && !state.gameOver) {
-      sendMessage(true);  // 自動觸發 NPC 繼續說話
+    if (state.autoChat && !state.npcBusy && !state.gameOver) {
+      triggerNpcRound();
     }
-  }, 8000); // 8 秒無操作後 NPC 自動繼續
+  }, 8000);
 }
 
 function cancelAutoChat() {
@@ -393,11 +523,11 @@ function addSystemMsg(content) {
 
 function showVerdict(data) {
   const area = document.getElementById('chat-area');
-  const icons = { green: '🟢', yellow: '🟡', red: '🔴' };
+  const icons = { green: '\uD83D\uDFE2', yellow: '\uD83D\uDFE1', red: '\uD83D\uDD34' };
   const div = document.createElement('div');
   div.className = 'msg msg-verdict';
   div.innerHTML = `
-    <div class="verdict-icon">${icons[data.verdict] || '⚖️'}</div>
+    <div class="verdict-icon">${icons[data.verdict] || '\u2696\uFE0F'}</div>
     <div class="verdict-text">${escHtml(data.feedback)}</div>
     <div class="correct-answer"><strong>正確答案：</strong>${escHtml(data.correct_answer)}</div>
   `;
@@ -405,18 +535,19 @@ function showVerdict(data) {
   area.scrollTop = area.scrollHeight;
 
   document.getElementById('new-game-btn').style.display = 'block';
-  document.querySelectorAll('.accuse-btn').forEach(b => b.disabled = true);
+  document.getElementById('accuse-btn').disabled = true;
+  cancelAutoChat();
+  document.getElementById('auto-chat-indicator').classList.remove('active');
 }
 
 function setLoading(on) {
-  state.loading = on;
   const area = document.getElementById('chat-area');
   const existing = document.getElementById('loading-indicator');
   if (on && !existing) {
     const div = document.createElement('div');
     div.id = 'loading-indicator';
     div.className = 'loading-dots';
-    div.innerHTML = '<span></span><span></span><span></span> NPC 們正在思考...';
+    div.innerHTML = '<span></span><span></span><span></span> NPC 正在思考...';
     area.appendChild(div);
     area.scrollTop = area.scrollHeight;
   } else if (!on && existing) {
@@ -424,21 +555,8 @@ function setLoading(on) {
   }
 }
 
-function enableInput() {
-  document.getElementById('msg-input').disabled = false;
-  document.getElementById('send-btn').disabled = false;
-  document.querySelectorAll('.accuse-btn').forEach(b => b.disabled = false);
-  document.getElementById('msg-input').focus();
-}
-
-function disableInput() {
-  document.getElementById('msg-input').disabled = true;
-  document.getElementById('send-btn').disabled = true;
-  document.querySelectorAll('.accuse-btn').forEach(b => b.disabled = true);
-}
-
 function updateRound() {
-  document.getElementById('round-info').textContent = `第 ${state.round} / ${state.maxRounds} 回合`;
+  document.getElementById('round-text').textContent = `第 ${state.round} / ${state.maxRounds} 回合`;
 }
 
 function escHtml(s) {

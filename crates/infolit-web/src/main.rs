@@ -72,6 +72,8 @@ struct Args {
 
 struct AppState {
     sessions: Mutex<HashMap<Uuid, GameSession>>,
+    /// 玩家訊息緩衝區（獨立鎖，不與 session 競爭）
+    pending_messages: Mutex<HashMap<Uuid, Vec<String>>>,
     actors: Vec<infolit_game::actor::Actor>,
     catalog: Vec<infolit_game::deception::DeceptionPattern>,
     topics: Vec<shared_types::Topic>,
@@ -92,6 +94,7 @@ struct GameCreated {
     session_id: String,
     topic: String,
     actors: Vec<ActorInfo>,
+    liar_count: usize,
 }
 
 #[derive(Serialize)]
@@ -115,7 +118,7 @@ struct ChatReq {
 
 #[derive(Deserialize)]
 struct AccuseReq {
-    actor_index: usize,
+    actor_indices: Vec<usize>,
     reason: String,
 }
 
@@ -124,6 +127,7 @@ struct AccuseResponse {
     verdict: String,
     feedback: String,
     correct_answer: String,
+    liar_count: usize,
 }
 
 // ── 錯誤輔助 ────────────────────────────────────────────────────────────────
@@ -198,6 +202,7 @@ async fn create_game(
         session_id: session_id.to_string(),
         topic: topic.question,
         actors: actor_infos,
+        liar_count: liar_count,
     }))
 }
 
@@ -270,29 +275,56 @@ async fn opening_round(
         .keep_alive(KeepAlive::default()))
 }
 
-/// 玩家發言 → 所有演員回應（SSE 逐條推送）
-async fn chat(
+/// 玩家發言 — 只緩衝訊息，立即回應（不等 LLM）
+async fn say(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<Uuid>,
     Json(req): Json<ChatReq>,
-) -> Result<SseStream, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
+    if req.content.is_empty() {
+        return Ok(Json(serde_json::json!({ "ok": true })));
+    }
     info!(
-        "POST /api/game/{}/chat — 玩家發言：{}",
+        "POST /api/game/{}/say — 緩衝玩家訊息：{}",
         session_id,
         req.content.chars().take(30).collect::<String>()
     );
+    // 只鎖 pending_messages（快，不與 LLM 呼叫競爭）
+    state
+        .pending_messages
+        .lock()
+        .await
+        .entry(session_id)
+        .or_default()
+        .push(req.content);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
 
-    // 先驗證 session 並加入學生發言
+/// 觸發 NPC 回應 — 先排入所有待處理玩家訊息，再逐位演員 SSE 推送
+async fn respond(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<Uuid>,
+) -> Result<SseStream, (StatusCode, Json<serde_json::Value>)> {
+    info!("POST /api/game/{}/respond — 觸發 NPC 回應", session_id);
+
+    // 1. 取出所有待處理玩家訊息並寫入 transcript
     {
+        let msgs = state
+            .pending_messages
+            .lock()
+            .await
+            .remove(&session_id)
+            .unwrap_or_default();
         let mut sessions = state.sessions.lock().await;
         let session = sessions
             .get_mut(&session_id)
             .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "找不到遊戲"))?;
-        if !req.content.is_empty() {
-            session.student_says(req.content);
+        for msg in msgs {
+            session.student_says(msg);
         }
     }
 
+    // 2. SSE 逐位演員回應
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
 
     tokio::spawn(async move {
@@ -303,6 +335,23 @@ async fn chat(
         };
 
         for actor in &order {
+            // 每位演員回應前，先把期間新到的玩家訊息也排入
+            {
+                let msgs = state
+                    .pending_messages
+                    .lock()
+                    .await
+                    .remove(&session_id)
+                    .unwrap_or_default();
+                if !msgs.is_empty() {
+                    let mut sessions = state.sessions.lock().await;
+                    let session = sessions.get_mut(&session_id).unwrap();
+                    for msg in msgs {
+                        session.student_says(msg);
+                    }
+                }
+            }
+
             let msg = {
                 let mut sessions = state.sessions.lock().await;
                 let session = sessions.get_mut(&session_id).unwrap();
@@ -335,7 +384,7 @@ async fn chat(
         .keep_alive(KeepAlive::default()))
 }
 
-/// 指控某位演員是騙子
+/// 指控演員是騙子（支援多人指控）
 async fn accuse(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<Uuid>,
@@ -346,12 +395,19 @@ async fn accuse(
         .get(&session_id)
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "找不到遊戲"))?;
 
-    if req.actor_index < 1 || req.actor_index > session.actors.len() {
-        return Err(api_err(StatusCode::BAD_REQUEST, "無效的成員編號"));
+    if req.actor_indices.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "請至少指控一位成員"));
     }
 
-    let accused = &session.actors[req.actor_index - 1];
-    let (verdict, feedback) = session.score(&accused.id, &req.reason);
+    let mut accused_ids = Vec::new();
+    for &idx in &req.actor_indices {
+        if idx < 1 || idx > session.actors.len() {
+            return Err(api_err(StatusCode::BAD_REQUEST, format!("無效的成員編號：{}", idx)));
+        }
+        accused_ids.push(session.actors[idx - 1].id.clone());
+    }
+
+    let (verdict, feedback) = session.score_multi(&accused_ids, &req.reason);
 
     let verdict_str = match verdict {
         shared_types::Verdict::Green => "green",
@@ -363,6 +419,7 @@ async fn accuse(
         verdict: verdict_str.into(),
         feedback,
         correct_answer: session.topic.correct_answer.clone(),
+        liar_count: session.liar_ids.len(),
     }))
 }
 
@@ -401,6 +458,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         sessions: Mutex::new(HashMap::new()),
+        pending_messages: Mutex::new(HashMap::new()),
         actors,
         catalog,
         topics,
@@ -413,7 +471,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(health))
         .route("/api/game/new", post(create_game))
         .route("/api/game/:id/opening", post(opening_round))
-        .route("/api/game/:id/chat", post(chat))
+        .route("/api/game/:id/say", post(say))
+        .route("/api/game/:id/respond", post(respond))
         .route("/api/game/:id/accuse", post(accuse))
         .fallback(fallback)
         .with_state(state);
