@@ -33,16 +33,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #auto-chat-indicator { display: none; color: #4caf50; font-weight: 600; font-size: .8rem; animation: pulse 2s infinite; }
 #auto-chat-indicator.active { display: flex; align-items: center; gap: 4px; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
-#chat-area { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+#chat-area { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 6px; }
 .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; font-size: .95rem; word-break: break-word; }
 .msg .speaker { font-weight: 700; font-size: .85rem; margin-bottom: 2px; }
 .msg-npc { align-self: flex-start; background: #fff; border: 1px solid #e0e0e0; }
+.msg-npc.continuation { margin-top: -2px; }
+.msg-npc.continuation .speaker { display: none; }
+.msg + .msg-player, .msg + .msg-system, .msg + .msg-verdict, .msg-player + .msg-npc, .msg-system + .msg-npc { margin-top: 6px; }
 .msg-player { align-self: flex-end; background: #4361ee; color: #fff; }
 .msg-system { align-self: center; background: #fff3cd; color: #856404; font-size: .85rem; border-radius: 8px; text-align: center; }
 .msg-verdict { align-self: center; background: #fff; border-radius: 12px; padding: 20px; text-align: center; max-width: 95%; box-shadow: 0 2px 12px rgba(0,0,0,.1); }
 .msg-verdict .verdict-icon { font-size: 3rem; margin-bottom: 8px; }
 .msg-verdict .verdict-text { font-size: 1rem; line-height: 1.6; margin-bottom: 12px; white-space: pre-line; }
 .msg-verdict .correct-answer { background: #e8f5e9; padding: 10px; border-radius: 8px; font-size: .9rem; margin-top: 8px; }
+.unread-divider { align-self: stretch; display: flex; align-items: center; gap: 10px; font-size: .75rem; color: #e74c3c; font-weight: 600; margin: 4px 0; user-select: none; }
+.unread-divider::before, .unread-divider::after { content: ''; flex: 1; height: 1px; background: rgba(231,76,60,.45); }
+#new-msg-btn { position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); display: none; padding: 8px 18px; background: #4361ee; color: #fff; border: none; border-radius: 999px; font-size: .85rem; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(67,97,238,.35); z-index: 10; transition: opacity .15s; }
+#new-msg-btn.visible { display: inline-flex; align-items: center; gap: 6px; }
+#new-msg-btn:hover { background: #3a56d4; }
+#game { position: relative; }
 .loading-dots { align-self: flex-start; padding: 12px 18px; background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; }
 .loading-dots span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #999; margin: 0 2px; animation: bounce .6s infinite alternate; }
 .loading-dots span:nth-child(2) { animation-delay: .2s; }
@@ -136,6 +145,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <span id="auto-chat-indicator"><span>&#9679;</span> 持續對話中</span>
   </div>
   <div id="chat-area"></div>
+  <button id="new-msg-btn" onclick="jumpToUnread()">↓ 新訊息</button>
   <div id="input-area">
     <div id="input-row">
       <textarea id="msg-input" rows="1" placeholder="輸入你想說的話..."
@@ -189,7 +199,6 @@ let state = {
   diffLiars: 1,
   liarCount: 1,
   autoChat: false,
-  autoChatTimer: null,
   accuseSelected: new Set(),
   // 訊息佇列與 NPC 回應狀態
   msgQueue: [],       // 待送出的玩家訊息
@@ -288,7 +297,6 @@ async function sendMessage() {
   }).catch(() => {}); // fire and forget
 
   state.msgQueue.push(text);
-  cancelAutoChat();
 
   // 如果 NPC 不忙，馬上觸發回應
   if (!state.npcBusy) {
@@ -299,11 +307,10 @@ async function sendMessage() {
 
 // NPC 一輪回應完後的回呼
 function onNpcRoundDone() {
-  // 有在 NPC 回應期間送來的新訊息 → 再跑一輪
-  if (state.msgQueue.length > 0 && !state.gameOver) {
+  if (state.gameOver) return;
+  // 有玩家訊息排隊 OR auto-chat 開著 → 立即接下一輪，不等
+  if (state.msgQueue.length > 0 || state.autoChat) {
     triggerNpcRound();
-  } else {
-    scheduleAutoChat();
   }
 }
 
@@ -321,7 +328,6 @@ async function triggerNpcRound() {
 
   state.npcBusy = true;
   setLoading(true);
-  cancelAutoChat();
 
   try {
     await readSSE(`/api/game/${state.sessionId}/respond`, 'POST');
@@ -338,7 +344,6 @@ async function triggerNpcRound() {
 
 function openAccuseModal() {
   if (state.gameOver) return;
-  cancelAutoChat();
 
   state.accuseSelected = new Set();
   const container = document.getElementById('modal-actors');
@@ -368,7 +373,10 @@ function openAccuseModal() {
 
 function closeAccuseModal() {
   document.getElementById('accuse-modal').classList.remove('show');
-  scheduleAutoChat();
+  // 關閉 modal 後如 auto-chat 開著、NPC 又閒，立即接著對話
+  if (state.autoChat && !state.npcBusy && !state.gameOver) {
+    triggerNpcRound();
+  }
 }
 
 function toggleAccuseSelect(item, index) {
@@ -466,27 +474,9 @@ function toggleAutoChat() {
   const indicator = document.getElementById('auto-chat-indicator');
   if (state.autoChat) {
     indicator.classList.add('active');
-    scheduleAutoChat();
+    if (!state.npcBusy && !state.gameOver) triggerNpcRound();
   } else {
     indicator.classList.remove('active');
-    cancelAutoChat();
-  }
-}
-
-function scheduleAutoChat() {
-  cancelAutoChat();
-  if (!state.autoChat || state.npcBusy || state.gameOver) return;
-  state.autoChatTimer = setTimeout(() => {
-    if (state.autoChat && !state.npcBusy && !state.gameOver) {
-      triggerNpcRound();
-    }
-  }, 8000);
-}
-
-function cancelAutoChat() {
-  if (state.autoChatTimer) {
-    clearTimeout(state.autoChatTimer);
-    state.autoChatTimer = null;
   }
 }
 
@@ -498,27 +488,126 @@ function addNpcMsg(speaker, content) {
   div.className = 'msg msg-npc';
   const idx = state.actors.findIndex(a => a.name === speaker);
   const color = idx >= 0 ? COLORS[idx % COLORS.length] : '#333';
+  // 同顏色的極淡底色與邊框
+  div.style.background = hexToRgba(color, 0.06);
+  div.style.borderColor = hexToRgba(color, 0.18);
+  div.dataset.speaker = speaker;
+
+  // 連續同一個 NPC：第二段以後不顯示名字
+  const prev = area.lastElementChild;
+  if (prev && prev.classList.contains('msg-npc') && prev.dataset.speaker === speaker) {
+    div.classList.add('continuation');
+  }
+
   div.innerHTML = `<div class="speaker" style="color:${color}">${speaker}</div><div>${escHtml(content)}</div>`;
-  area.appendChild(div);
-  area.scrollTop = area.scrollHeight;
+  appendMsg(div);
 }
 
+// #rrggbb → rgba(r,g,b,a)
+function hexToRgba(hex, a) {
+  const h = hex.replace('#','');
+  const r = parseInt(h.substring(0,2), 16);
+  const g = parseInt(h.substring(2,4), 16);
+  const b = parseInt(h.substring(4,6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ── 滾動 + 未讀分隔線 ──
+const SCROLL_BOTTOM_THRESHOLD = 60;
+
+function isAtBottom(area) {
+  return area.scrollHeight - area.scrollTop - area.clientHeight <= SCROLL_BOTTOM_THRESHOLD;
+}
+
+function ensureUnreadDivider(area) {
+  let divider = area.querySelector('.unread-divider');
+  if (!divider) {
+    divider = document.createElement('div');
+    divider.className = 'unread-divider';
+    divider.textContent = '從這裡開始是新訊息';
+    area.appendChild(divider);
+  }
+  return divider;
+}
+
+function clearUnreadDivider(area) {
+  const d = area.querySelector('.unread-divider');
+  if (d) d.remove();
+  document.getElementById('new-msg-btn').classList.remove('visible');
+}
+
+// 加入訊息：使用者在底部就跟著滑下去；卷上去就保留位置 + 顯示分隔線與按鈕
+function appendMsg(div) {
+  const area = document.getElementById('chat-area');
+  const wasAtBottom = isAtBottom(area);
+  if (wasAtBottom) {
+    // 用戶已跟上對話：清掉舊分隔線，否則下次滑上去看到的是過期定錨
+    clearUnreadDivider(area);
+  } else {
+    ensureUnreadDivider(area);
+    // 只有當分隔線剛被插入到最末（即這是第一則新訊息）時，才拔 .continuation
+    const last = area.lastElementChild;
+    if (last && last.classList.contains('unread-divider')) {
+      div.classList.remove('continuation');
+    }
+    document.getElementById('new-msg-btn').classList.add('visible');
+  }
+  area.appendChild(div);
+  if (wasAtBottom) {
+    area.scrollTop = area.scrollHeight;
+  }
+}
+
+function jumpToUnread() {
+  const area = document.getElementById('chat-area');
+  const d = area.querySelector('.unread-divider');
+  if (d) {
+    d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    area.scrollTop = area.scrollHeight;
+  }
+  // 跳完之後按鈕沒用了，藏起來；分隔線保留，當用戶閱讀的視覺定錨
+  document.getElementById('new-msg-btn').classList.remove('visible');
+}
+
+// 用戶滾到底部 → 藏按鈕、延遲 1.5s 清分隔線（給視覺殘留時間）
+// 中途又往上滑就取消清除，分隔線繼續停留
+let bottomLingerTimer = null;
+window.addEventListener('DOMContentLoaded', () => {
+  const area = document.getElementById('chat-area');
+  if (!area) return;
+  area.addEventListener('scroll', () => {
+    if (isAtBottom(area)) {
+      document.getElementById('new-msg-btn').classList.remove('visible');
+      if (!bottomLingerTimer) {
+        bottomLingerTimer = setTimeout(() => {
+          clearUnreadDivider(area);
+          bottomLingerTimer = null;
+        }, 1500);
+      }
+    } else if (bottomLingerTimer) {
+      clearTimeout(bottomLingerTimer);
+      bottomLingerTimer = null;
+    }
+  });
+});
+
 function addPlayerMsg(content) {
+  // 玩家自己送的訊息一定捲到底（無視當前位置）— 這是用戶主動觸發的動作
   const area = document.getElementById('chat-area');
   const div = document.createElement('div');
   div.className = 'msg msg-player';
   div.innerHTML = `<div class="speaker">你</div><div>${escHtml(content)}</div>`;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
+  clearUnreadDivider(area);
 }
 
 function addSystemMsg(content) {
-  const area = document.getElementById('chat-area');
   const div = document.createElement('div');
   div.className = 'msg msg-system';
   div.textContent = content;
-  area.appendChild(div);
-  area.scrollTop = area.scrollHeight;
+  appendMsg(div);
 }
 
 function showVerdict(data) {
@@ -531,12 +620,13 @@ function showVerdict(data) {
     <div class="verdict-text">${escHtml(data.feedback)}</div>
     <div class="correct-answer"><strong>正確答案：</strong>${escHtml(data.correct_answer)}</div>
   `;
+  // 結算訊息強制顯示，無視滾動位置
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
+  clearUnreadDivider(area);
 
   document.getElementById('new-game-btn').style.display = 'block';
   document.getElementById('accuse-btn').disabled = true;
-  cancelAutoChat();
   document.getElementById('auto-chat-indicator').classList.remove('active');
 }
 
@@ -548,8 +638,10 @@ function setLoading(on) {
     div.id = 'loading-indicator';
     div.className = 'loading-dots';
     div.innerHTML = '<span></span><span></span><span></span> NPC 正在思考...';
+    // loading 指示器只在底部捲動時跟著滑下，不觸發未讀分隔
+    const wasAtBottom = isAtBottom(area);
     area.appendChild(div);
-    area.scrollTop = area.scrollHeight;
+    if (wasAtBottom) area.scrollTop = area.scrollHeight;
   } else if (!on && existing) {
     existing.remove();
   }

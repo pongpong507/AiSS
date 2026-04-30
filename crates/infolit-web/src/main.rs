@@ -236,6 +236,40 @@ async fn create_game(
 /// SSE 回應型別別名
 type SseStream = Sse<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>;
 
+/// 把單一演員的多段訊息逐個透過 SSE 送出，模擬「打字節奏」
+///
+/// 第一段立即送（避免 round trip 卡住），第二段以後依長度加 350-700ms 隨機延遲。
+/// 回傳 `Err(())` 代表 client 已斷線，呼叫者應停止後續發送。
+async fn push_fragments(
+    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    speaker: &str,
+    fragments: &[String],
+) -> Result<(), ()> {
+    use rand::Rng;
+    for (idx, frag) in fragments.iter().enumerate() {
+        if idx > 0 {
+            // 依長度加延遲：每個字 ~50ms，加 200ms 的 jitter
+            let chars = frag.chars().count() as u64;
+            let base = 200u64 + chars * 50;
+            let jitter = rand::thread_rng().gen_range(0..200u64);
+            tokio::time::sleep(tokio::time::Duration::from_millis(base + jitter)).await;
+        }
+        let msg = MessageInfo {
+            speaker: speaker.to_string(),
+            content: frag.clone(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        if tx
+            .send(Ok(Event::default().event("message").data(json)))
+            .await
+            .is_err()
+        {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
 /// 開場發言：每位演員各說一輪（SSE 逐條推送）
 async fn opening_round(
     State(state): State<Arc<AppState>>,
@@ -262,31 +296,37 @@ async fn opening_round(
 
         for actor in &order {
             info!("  演員 {} 正在回應...", actor.name);
-            let msg = {
+            let outcome: Result<Vec<String>, String> = {
                 let mut sessions = state.sessions.lock().await;
                 let session = sessions.get_mut(&session_id).unwrap();
-                match session.actor_respond(&actor.id, &state.model).await {
-                    Ok(content) => {
-                        info!("  演員 {} 回應完成（{} 字）", actor.name, content.len());
-                        MessageInfo {
-                            speaker: actor.name.clone(),
-                            content,
-                        }
-                    }
-                    Err(e) => {
-                        warn!("  演員 {} 回應失敗：{}", actor.name, e);
-                        MessageInfo {
-                            speaker: "系統".into(),
-                            content: format!("{} 回應失敗：{}", actor.name, e),
-                        }
-                    }
-                }
+                session
+                    .actor_respond(&actor.id, &state.model)
+                    .await
+                    .map_err(|e| e.to_string())
             };
 
-            let json = serde_json::to_string(&msg).unwrap();
-            let event = Event::default().event("message").data(json);
-            if tx.send(Ok(event)).await.is_err() {
-                break; // client disconnected
+            match outcome {
+                Ok(fragments) => {
+                    info!("  演員 {} 回應完成（{} 段）", actor.name, fragments.len());
+                    if push_fragments(&tx, &actor.name, &fragments).await.is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    warn!("  演員 {} 回應失敗：{}", actor.name, e);
+                    let msg = MessageInfo {
+                        speaker: "系統".into(),
+                        content: format!("{} 回應失敗：{}", actor.name, e),
+                    };
+                    let json = serde_json::to_string(&msg).unwrap();
+                    if tx
+                        .send(Ok(Event::default().event("message").data(json)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
 
@@ -379,25 +419,35 @@ async fn respond(
                 }
             }
 
-            let msg = {
+            let outcome: Result<Vec<String>, String> = {
                 let mut sessions = state.sessions.lock().await;
                 let session = sessions.get_mut(&session_id).unwrap();
-                match session.actor_respond(&actor.id, &state.model).await {
-                    Ok(content) => MessageInfo {
-                        speaker: actor.name.clone(),
-                        content,
-                    },
-                    Err(e) => MessageInfo {
-                        speaker: "系統".into(),
-                        content: format!("{} 回應失敗：{}", actor.name, e),
-                    },
-                }
+                session
+                    .actor_respond(&actor.id, &state.model)
+                    .await
+                    .map_err(|e| e.to_string())
             };
 
-            let json = serde_json::to_string(&msg).unwrap();
-            let event = Event::default().event("message").data(json);
-            if tx.send(Ok(event)).await.is_err() {
-                break;
+            match outcome {
+                Ok(fragments) => {
+                    if push_fragments(&tx, &actor.name, &fragments).await.is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let msg = MessageInfo {
+                        speaker: "系統".into(),
+                        content: format!("{} 回應失敗：{}", actor.name, e),
+                    };
+                    let json = serde_json::to_string(&msg).unwrap();
+                    if tx
+                        .send(Ok(Event::default().event("message").data(json)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
 

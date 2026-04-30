@@ -251,7 +251,11 @@ async fn main() -> anyhow::Result<()> {
     let opening_order = session.speaking_order();
     for actor in &opening_order {
         match session.actor_respond(&actor.id, &args.model).await {
-            Ok(response) => print_turn(&actor.name, &response),
+            Ok(fragments) => {
+                for frag in &fragments {
+                    print_turn(&actor.name, frag);
+                }
+            }
             Err(e) => {
                 eprintln!("⚠️  {} 回應失敗：{}（繼續遊戲）", actor.name, e);
             }
@@ -352,7 +356,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             match session.actor_respond(&actor.id, &args.model).await {
-                Ok(response) => print_turn(&actor.name, &response),
+                Ok(fragments) => {
+                    for frag in &fragments {
+                        print_turn(&actor.name, frag);
+                    }
+                }
                 Err(e) => {
                     eprintln!("⚠️  {} 回應失敗：{}", actor.name, e);
                 }
