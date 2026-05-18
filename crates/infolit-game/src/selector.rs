@@ -109,6 +109,7 @@ mod tests {
             short_bio: String::new(),
             personality_traits: vec![],
             speech_style: String::new(),
+            discussion_lens: String::new(),
             affinity,
             eagerness: 5,
         }

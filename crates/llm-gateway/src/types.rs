@@ -60,6 +60,9 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// 重複懲罰（Ollama: repeat_penalty，預設 1.1；高一點抑制 LLM 自我循環）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
     /// Provider-specific 擴充參數（Anthropic cache_control、OpenAI logit_bias 等）
     #[serde(default)]
     pub extensions: HashMap<String, serde_json::Value>,
@@ -74,6 +77,7 @@ impl ChatRequest {
             tools: vec![],
             temperature: None,
             max_tokens: None,
+            repeat_penalty: None,
             extensions: HashMap::new(),
         }
     }
@@ -90,6 +94,11 @@ impl ChatRequest {
 
     pub fn with_max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
+        self
+    }
+
+    pub fn with_repeat_penalty(mut self, p: f32) -> Self {
+        self.repeat_penalty = Some(p);
         self
     }
 }

@@ -13,7 +13,6 @@ use crate::deception::DeceptionPattern;
 use crate::pacing::PacingConfig;
 use llm_gateway::types::{ChatMessage, ChatRequest};
 use llm_gateway::provider::LlmProvider;
-use rand::prelude::*;
 use shared_types::{Topic, Verdict};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,8 +49,10 @@ impl GameSession {
         pacing: PacingConfig,
         provider: Arc<dyn LlmProvider>,
     ) -> Self {
+        let session_id = Uuid::new_v4();
+        crate::debug_log::write_session_header(session_id, &topic, &actors, &liar_ids);
         Self {
-            session_id: Uuid::new_v4(),
+            session_id,
             actors,
             liar_ids,
             deceptions,
@@ -66,32 +67,60 @@ impl GameSession {
     pub fn compose_system_prompt(&self, actor: &Actor) -> String {
         let is_liar = self.liar_ids.contains(&actor.id);
 
+        let lens_line = if actor.discussion_lens.is_empty() {
+            String::new()
+        } else {
+            format!("\n你的論點切入角度：{}（這是你和其他人不同的視角，別人也許會講別的角度，你請聚焦在這個方向）", actor.discussion_lens)
+        };
+
         let base = format!(
             "\
 你是「{name}」。
 個人簡介：{bio}
 說話風格：{style}
-個性特質：{traits}
+個性特質：{traits}{lens_line}
 
 你正在參加一個線上討論，主題是：「{topic}」
 
-【語言規則（非常重要）】
-1. 請全程使用臺灣繁體中文，使用臺灣日常口語表達方式。
-2. 禁止使用大陸用語，以下為常見對照：
-   視頻請說影片、信息請說資訊、軟件請說軟體、網絡請說網路、
-   激光請說雷射、優化請說最佳化、高清請說高畫質、鏈接請說連結、
-   質量請說品質、默認請說預設、回復請說回覆。
-3. 語氣符合你的說話風格。
-4. 【LINE 訊息格式】輸出格式為多個短訊息片段，用「|」（半形垂直線）分隔。範例：「我聽過這個|好像跟回音定位有關」。每個片段最多 10 個中文字（含標點），整則回應大約 30-50 字之間，依需要決定要說多少。
-5. 不要用句號「。」。
-6. 【第一段直接切入正題】第一個片段就要表達你的看法或論點，不要花片段在打招呼、自我介紹、或「我跟你們說個秘密」這類鋪陳。錯誤示範：「嘿大家好|讓我來說一下|...」。請依你的人設變化開頭句式，不要每次都用「我覺得」。
-7. 不要解釋太多、不列清單、不用『首先、其次』等連接詞。
-8. 回答對象是小學四到六年級學生，請用他們聽得懂的簡單詞彙。
-9. 【不要重複】對話中其他人的發言會以 `[名字] 內容` 形式出現。如果別人已經講過你想說的觀點，請換個切入角度——可以延伸、補充、提疑問、舉自己的例子，或表達同意但加新資訊。絕對不要照抄別人或自己之前的句子。",
+【系統處理規則（嚴格遵守，否則訊息會被切壞或整段丟掉）】
+你的輸出會經過自動處理才顯示給玩家。系統會這樣處理：
+- 你用「|」分隔的每個片段，會變成獨立的訊息泡泡
+- 每泡泡上限 10 字；超過會在「，、！？」處再切
+- 「，」「、」是切點且會被丟掉；「！」「？」是切點但會保留
+- 整則回應**只保留前 5 個片段**，第 6 段之後玩家看不到
+- 句號「。」會被自動移除
+- 最後一個片段如果是孤立連接詞（而且、但是、可是、所以、因為、然後、舉例來說、比方說…）整段會被丟掉
+- 開頭是「（」或「）」的片段會被當成旁白丟掉
+
+因此你必須：
+1. 用「|」分段，每段 ≤10 字
+2. 整則最多 5 段、總長約 30-40 字
+3. 最後一段必須是**完整意思且以「！」或「？」結尾**
+4. 不要把連接詞單獨當成一段（例如不要「⋯⋯|而且|⋯⋯」，要寫「⋯⋯，而且⋯⋯|」或把它併進下一段）
+5. 不要寫括號旁白（如「（思考中）」「（清了清喉嚨）」）
+6. 不要用句號「。」
+
+範例正確：「我覺得不對！|冷凍蔬菜還是有營養|你看包裝上都會寫！」
+範例錯誤：「（清了清喉嚨）|嘿大家好|我跟你們說|其實啊|而且」
+
+【語言與風格】
+- 全程臺灣繁體中文，使用臺灣日常口語表達。
+- 禁止大陸用語：視頻→影片、信息→資訊、軟件→軟體、網絡→網路、激光→雷射、優化→最佳化、高清→高畫質、鏈接→連結、質量→品質、默認→預設、回復→回覆。
+- 語氣符合你的人設。
+- 第一段就切入正題，不要花段落打招呼、自我介紹、或鋪陳「我跟你們說個秘密」這類。依人設變化開頭句式，不要每次都用「我覺得」。
+- 不要解釋太多、不列清單、不用「首先、其次」等連接詞。
+- 對象是小學四到六年級學生，用他們聽得懂的簡單詞彙。
+
+【不要重複】
+系統 prompt 末會附「目前場上其他人已經說過的話」清單。那是讓你知道別人講過什麼觀點、避免重複，**不是你要說的話**：
+- 不要把那段清單的內容當成自己的台詞輸出
+- 不要逐字重複任何人（包含自己）說過的句子
+- 觀點已被別人說過時，請換切入角度——延伸、補充、提疑問、舉自己的例子，或同意但加新資訊",
             name = actor.name,
             bio = actor.short_bio,
             style = actor.speech_style,
             traits = actor.personality_traits.join("、"),
+            lens_line = lens_line,
             topic = self.topic.question,
         );
 
@@ -127,39 +156,112 @@ impl GameSession {
 
     /// 取得某演員的當前對話歷史。
     ///
-    /// - 自己過去的發言 → `assistant` 訊息
-    /// - 學生發言 → `user` 訊息（無前綴）
-    /// - 其他 NPC 發言 → `user` 訊息，內容前加 `[名字]` 標籤，讓 LLM 知道是誰說的
-    /// - 連續同一說話者的多個片段（多個 ChatTurn）會合併成一則訊息，用 `|` 連接
+    /// 設計重點：actor 自己過去的發言**不**放在 chat history（LLM 看到自己上輪講過 X 就會直接複製 X
+    /// 造成跨輪洗版）。改成把「自己最近講過的話」當成「請避開的清單」放在 system prompt。
+    /// 實際 chat history 只放學生的問題（user role），沒有 assistant 訊息。
+    ///
+    /// - 場上其他 NPC 的發言 → 附加在 system prompt 的「其他人說過」區塊
+    /// - 自己最近 5 個 turn → 附加在 system prompt 的「你最近說過、請避開」區塊
+    /// - 學生發言 → chat history 中的 user 訊息
+    /// - 學生未發言（開場或 auto-chat）→ 用一個 synthetic prompt 觸發回應
     fn build_messages_for_actor(&self, actor: &Actor) -> Vec<ChatMessage> {
-        let system_prompt = self.compose_system_prompt(actor);
-        let mut messages = vec![ChatMessage::system(&system_prompt)];
+        let base = self.compose_system_prompt(actor);
 
-        // 把連續同一說話者的 ChatTurn 合併
-        let mut grouped: Vec<(String, String, String)> = Vec::new();
+        // 1. 其他 NPC 的發言：合併同人連續片段
+        let mut others_lines: Vec<String> = Vec::new();
+        let mut last_other: Option<&str> = None;
         for turn in &self.transcript {
-            if let Some(last) = grouped.last_mut() {
-                if last.0 == turn.speaker_id {
-                    last.2.push('|');
-                    last.2.push_str(&turn.content);
+            if turn.speaker_id == actor.id || turn.speaker_id == "student" {
+                last_other = None;
+                continue;
+            }
+            if last_other == Some(turn.speaker_id.as_str()) {
+                if let Some(last) = others_lines.last_mut() {
+                    last.push('｜');
+                    last.push_str(&turn.content);
                     continue;
                 }
             }
-            grouped.push((
-                turn.speaker_id.clone(),
-                turn.speaker_name.clone(),
-                turn.content.clone(),
-            ));
+            others_lines.push(format!("- {}：{}", turn.speaker_name, turn.content));
+            last_other = Some(&turn.speaker_id);
         }
 
-        for (speaker_id, speaker_name, content) in grouped {
-            if speaker_id == actor.id {
-                messages.push(ChatMessage::assistant(&content));
-            } else if speaker_id == "student" {
-                messages.push(ChatMessage::user(&content));
+        // 2. 自己最近的發言（合併連續片段 → 每筆是一次完整發言）
+        let mut own_utterances: Vec<String> = Vec::new();
+        let mut prev_was_self = false;
+        for turn in &self.transcript {
+            if turn.speaker_id == actor.id {
+                if prev_was_self {
+                    if let Some(last) = own_utterances.last_mut() {
+                        last.push('｜');
+                        last.push_str(&turn.content);
+                        continue;
+                    }
+                }
+                own_utterances.push(turn.content.clone());
+                prev_was_self = true;
             } else {
-                messages.push(ChatMessage::user(&format!("[{}] {}", speaker_name, content)));
+                prev_was_self = false;
             }
+        }
+        // 只保留最近 5 次
+        let own_recent: Vec<&String> = own_utterances.iter().rev().take(5).rev().collect();
+
+        // 3. 組裝 system prompt
+        let mut parts: Vec<String> = vec![base];
+        if !others_lines.is_empty() {
+            parts.push(format!(
+                "【目前場上其他人已經說過的話（僅供參考、避免重複；不要逐字模仿、不要把這些字當成自己的台詞輸出）】\n{}",
+                others_lines.join("\n")
+            ));
+        }
+        // 注意：others_lines 區塊先附加，own_recent 永遠放在 system prompt 最末
+        // 因為 LLM 對「最後一條指令」最敏感
+        if !own_recent.is_empty() {
+            let own_block = own_recent
+                .iter()
+                .map(|u| format!("「{}」", u))
+                .collect::<Vec<_>>()
+                .join("\n");
+            parts.push(format!(
+                "⚠️【嚴格禁令：以下句子你都說過了，禁止再用】⚠️\n\
+                 你之前已經講過下列內容。**任何一句都不可以再說、不能逐字重複、不能只改一兩個字湊數**。\n\
+                 請完全換不同的句型、不同的比喻、不同的開頭、不同的切入角度。\n\
+                 如果你只會重複自己，玩家會立刻看穿。\n\n\
+                 【已禁用的句子】\n{}\n\n\
+                 請在這條禁令的限制下，重新發想一段不同的話。",
+                own_block
+            ));
+        }
+        let system_prompt = parts.join("\n\n");
+
+        let mut messages = vec![ChatMessage::system(&system_prompt)];
+
+        // 4. chat history：只放學生發言；連續同學生 turn 合併成一則 user
+        let mut student_blocks: Vec<String> = Vec::new();
+        let mut prev_was_student = false;
+        for turn in &self.transcript {
+            if turn.speaker_id == "student" {
+                if prev_was_student {
+                    if let Some(last) = student_blocks.last_mut() {
+                        last.push('\n');
+                        last.push_str(&turn.content);
+                        continue;
+                    }
+                }
+                student_blocks.push(turn.content.clone());
+                prev_was_student = true;
+            } else {
+                prev_was_student = false;
+            }
+        }
+        for block in student_blocks {
+            messages.push(ChatMessage::user(&block));
+        }
+
+        // 5. 開場 / auto-chat 沒學生發言時，給一個 synthetic 觸發
+        if messages.len() == 1 {
+            messages.push(ChatMessage::user("現在輪到你發言，請依你的人設講一兩句你對主題的看法。"));
         }
 
         messages
@@ -177,8 +279,9 @@ impl GameSession {
 
         let messages = self.build_messages_for_actor(&actor);
         let req = ChatRequest::new(model, messages)
-            .with_temperature(0.8)
-            .with_max_tokens(180);
+            .with_temperature(0.95)
+            .with_max_tokens(200)
+            .with_repeat_penalty(1.3);
 
         // Pacing 延遲（模擬真實對話節奏）
         let delay = self.pacing.random_response_delay();
@@ -189,6 +292,14 @@ impl GameSession {
         let fragments = split_into_fragments(&response.content);
 
         let is_liar = self.liar_ids.contains(&actor_id.to_string());
+        crate::debug_log::write_actor_turn(
+            self.session_id,
+            &actor,
+            is_liar,
+            &response.content,
+            &fragments,
+        );
+
         for frag in &fragments {
             self.transcript.push(ChatTurn {
                 speaker_id: actor_id.to_string(),
@@ -202,53 +313,9 @@ impl GameSession {
         Ok(fragments)
     }
 
-    /// 計算本輪發言順序（依 eagerness 加權隨機排序）
-    ///
-    /// eagerness 高的演員更容易排在前面。
-    /// 如果有演員連續 2 輪以上沒發言（silence_count >= 2），會被其他 NPC cue。
-    pub fn speaking_order(&self) -> Vec<Actor> {
-        let mut rng = thread_rng();
-        let mut actors_with_weight: Vec<(Actor, f64)> = self.actors.iter().map(|a| {
-            let base = a.eagerness as f64;
-            let silence_bonus = self.silence_count(&a.id) as f64 * 2.0;
-            (a.clone(), base + silence_bonus)
-        }).collect();
-
-        // 用加權隨機產生排序 key（weight * random），越大越前面
-        actors_with_weight.sort_by(|a, b| {
-            let key_a = a.1 * rng.gen::<f64>();
-            let key_b = b.1 * rng.gen::<f64>();
-            key_b.partial_cmp(&key_a).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        actors_with_weight.into_iter().map(|(a, _)| a).collect()
-    }
-
-    /// 計算某演員在最近對話中連續沉默的回合數
-    fn silence_count(&self, actor_id: &str) -> u32 {
-        let mut count = 0u32;
-        for turn in self.transcript.iter().rev() {
-            if turn.speaker_id == actor_id {
-                break;
-            }
-            if turn.speaker_id == "student" {
-                count += 1;
-            }
-        }
-        count
-    }
-
-    /// 取得需要被 cue 的沉默演員（連續 2 輪沒說話的）
-    pub fn silent_actors(&self) -> Vec<String> {
-        self.actors
-            .iter()
-            .filter(|a| self.silence_count(&a.id) >= 2)
-            .map(|a| a.id.clone())
-            .collect()
-    }
-
     /// 學生發言（加入 transcript）
     pub fn student_says(&mut self, content: String) {
+        crate::debug_log::write_student_turn(self.session_id, &content);
         self.transcript.push(ChatTurn {
             speaker_id: "student".to_string(),
             speaker_name: "你".to_string(),
@@ -335,7 +402,7 @@ impl GameSession {
 /// 5. 最多保留 `MAX_FRAGMENTS` 段
 ///
 /// 不對 `「」『』` 之類的引號做任何切割，因此引號內的內容不會被中斷。
-const MAX_FRAGMENTS: usize = 6;
+const MAX_FRAGMENTS: usize = 5;
 
 pub fn split_into_fragments(s: &str) -> Vec<String> {
     let cleaned: String = s
@@ -348,7 +415,12 @@ pub fn split_into_fragments(s: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let pipe_segments: Vec<&str> = cleaned.split('|').map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
+    // 同時接受半形 `|` 與全形 `｜`（U+FF5C），有些 LLM 會混用
+    let pipe_segments: Vec<&str> = cleaned
+        .split(|c: char| c == '|' || c == '｜')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
 
     let mut expanded: Vec<String> = Vec::new();
     for seg in pipe_segments {
@@ -387,10 +459,58 @@ pub fn split_into_fragments(s: &str) -> Vec<String> {
         .into_iter()
         .filter(|f| !starts_with_paren(f))
         .map(|f| strip_filler(&f))
+        .map(|f| cap_emojis(&f, 1))
         .filter(|f| !f.is_empty())
         .collect();
     result.truncate(MAX_FRAGMENTS);
+
+    // 末段如果是孤連接詞（「而且」「但是」之類）或明顯被截斷的尾巴 → 丟掉
+    while let Some(last) = result.last() {
+        if is_dangling_tail(last) {
+            result.pop();
+        } else {
+            break;
+        }
+    }
     result
+}
+
+/// 判斷片段是否為孤立連接詞（被截斷的尾巴）
+fn is_dangling_tail(s: &str) -> bool {
+    const CONJUNCTIONS: &[&str] = &[
+        "而且", "但是", "可是", "所以", "因為", "然後", "不過", "另外",
+        "舉例來說", "比方說", "再者", "其次", "首先", "總之", "於是",
+        "結果", "然而", "並且", "或是", "或者",
+    ];
+    let trimmed = s.trim();
+    CONJUNCTIONS.iter().any(|c| trimmed == *c)
+}
+
+/// 限制單一片段內的 emoji 數量。多餘的 emoji 直接丟掉。
+/// 用來阻止戲劇化 actor（如美美姐）一段塞 3-4 個 😱😱😱
+fn cap_emojis(s: &str, max: usize) -> String {
+    let mut count = 0usize;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if is_emoji(c) {
+            if count >= max {
+                continue;
+            }
+            count += 1;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 判斷字元是否為 emoji（涵蓋常見 Unicode 區段）
+fn is_emoji(c: char) -> bool {
+    let cp = c as u32;
+    matches!(
+        cp,
+        0x2600..=0x27BF      // 雜項符號 + dingbats
+        | 0x1F000..=0x1FFFF  // 大部分 emoji 區段（含 emoticons、symbols、transport、supplemental）
+    )
 }
 
 /// 開頭是括號的片段視為 LLM 的旁白／舞台指示，整段丟掉。
@@ -531,6 +651,7 @@ mod tests {
             short_bio: format!("{name} 的簡介"),
             personality_traits: vec!["特質一".into(), "特質二".into()],
             speech_style: "正式".into(),
+            discussion_lens: String::new(),
             affinity,
             eagerness: 5,
         }
@@ -681,22 +802,26 @@ mod tests {
     }
 
     #[test]
-    fn speaking_order_returns_all_actors() {
-        let session = make_session(vec!["a1".into()]);
-        let order = session.speaking_order();
-        assert_eq!(order.len(), 3);
-    }
-
-    #[test]
-    fn silent_actors_empty_at_start() {
-        let session = make_session(vec!["a1".into()]);
-        assert!(session.silent_actors().is_empty());
-    }
-
-    #[test]
     fn fragments_split_by_pipe() {
         let out = split_into_fragments("我覺得不對|沒有證據|你查過嗎");
         assert_eq!(out, vec!["我覺得不對", "沒有證據", "你查過嗎"]);
+    }
+
+    #[test]
+    fn fragments_split_by_full_width_pipe() {
+        // LLM 偶爾用全形 ｜（U+FF5C）而非半形 |
+        let out = split_into_fragments("其實這個傳說｜跟科學證據不符喔！｜我上次看過資料");
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], "其實這個傳說");
+        assert_eq!(out[1], "跟科學證據不符喔！");
+        assert_eq!(out[2], "我上次看過資料");
+    }
+
+    #[test]
+    fn fragments_split_by_mixed_pipes() {
+        // 半形與全形 pipe 混用
+        let out = split_into_fragments("第一段｜第二段|第三段");
+        assert_eq!(out, vec!["第一段", "第二段", "第三段"]);
     }
 
     #[test]
@@ -857,6 +982,47 @@ mod tests {
         // 括號在片段中間（如英文原文標註）必須保留
         let out = split_into_fragments("回音定位（Echolocation）");
         assert_eq!(out, vec!["回音定位（Echolocation）"]);
+    }
+
+    #[test]
+    fn fragments_drop_trailing_lone_conjunction() {
+        let out = split_into_fragments("我覺得不對！|而且");
+        assert_eq!(out, vec!["我覺得不對！"]);
+    }
+
+    #[test]
+    fn fragments_drop_multi_char_conjunction() {
+        // 「舉例來說」也算連接詞，會被丟
+        let out = split_into_fragments("這很重要！|要看過程！|舉例來說");
+        assert_eq!(out, vec!["這很重要！", "要看過程！"]);
+    }
+
+    #[test]
+    fn fragments_keep_short_complete_lines() {
+        // 短句但不是連接詞應保留
+        let out = split_into_fragments("真的嗎？|沒錯|你查過嗎");
+        assert_eq!(out, vec!["真的嗎？", "沒錯", "你查過嗎"]);
+    }
+
+    #[test]
+    fn fragments_cap_emojis_per_fragment() {
+        // 每片段最多 1 個 emoji，多餘的丟掉
+        let out = split_into_fragments("天哪😱😱😱！|這太誇張了🤯🦈！");
+        assert_eq!(out, vec!["天哪😱！", "這太誇張了🤯！"]);
+    }
+
+    #[test]
+    fn fragments_keep_single_emoji() {
+        // 單一 emoji 在片段中不應被影響
+        let out = split_into_fragments("超扯😆！|真的假的");
+        assert_eq!(out, vec!["超扯😆！", "真的假的"]);
+    }
+
+    #[test]
+    fn fragments_handle_no_emoji() {
+        // 沒有 emoji 時行為不變
+        let out = split_into_fragments("一般訊息|沒有 emoji");
+        assert_eq!(out, vec!["一般訊息", "沒有 emoji"]);
     }
 
     #[test]

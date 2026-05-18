@@ -21,3 +21,7 @@ docs/.obsidian/plugins/
 Thumbs.db
 desktop.ini
 /target2/
+
+# Debug 對話紀錄（INFOLIT_DEBUG_LOG=1 啟用時寫到 logs/）
+/logs/*
+!/logs/.gitkeep

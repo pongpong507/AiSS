@@ -15,6 +15,7 @@ use infolit_game::{
     selector::assemble_session,
     session::GameSession,
     topic::load_topics_from_dir,
+    turn_director::{AlgorithmicDirector, ModeratorDirector, TurnContext, TurnDirector},
 };
 use llm_gateway::adapters::{OllamaProvider, ThinkingMode};
 use llm_gateway::provider::LlmProvider;
@@ -66,6 +67,14 @@ struct Args {
     /// 顯示詳細 debug 訊息（預設只顯示對話內容）
     #[arg(long)]
     verbose: bool,
+
+    /// 主持人模式：指定 NPC ID 當主持人（由 LLM 決定點誰發言）；省略則用純演算法
+    #[arg(long)]
+    moderator: Option<String>,
+
+    /// 啟用 debug 對話紀錄，每局寫一份 Markdown 到 logs/session-<uuid>.md
+    #[arg(long, env = "INFOLIT_DEBUG_LOG")]
+    debug_log: bool,
 }
 
 fn print_divider(label: &str) {
@@ -175,6 +184,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // 把 clap 的 --debug-log flag 同步到 env var
+    if args.debug_log {
+        std::env::set_var("INFOLIT_DEBUG_LOG", "1");
+        println!("（Debug 對話紀錄已啟用：logs/session-<uuid>.md）");
+    }
+
     if args.doctor {
         return run_doctor(&args).await;
     }
@@ -226,7 +241,21 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut session =
-        GameSession::new(selected_actors.clone(), liar_ids, deceptions, topic.clone(), pacing, provider);
+        GameSession::new(selected_actors.clone(), liar_ids, deceptions, topic.clone(), pacing, provider.clone());
+
+    let director: Arc<dyn TurnDirector> = match &args.moderator {
+        Some(id) => {
+            println!("（主持人模式：{}）", id);
+            Arc::new(ModeratorDirector::new(
+                id.clone(),
+                provider.clone(),
+                args.model.clone(),
+                1,
+                3,
+            ))
+        }
+        None => Arc::new(AlgorithmicDirector::new(1, 3)),
+    };
 
     // ── 遊戲開始介紹 ──────────────────────────────────────────────────────────
     print_divider("🚀 InfoLit 資訊判讀遊戲（CLI Spike）");
@@ -246,9 +275,12 @@ async fn main() -> anyhow::Result<()> {
     println!("輸入你想說的話，或輸入 /accuseN（例如 /accuse2）指控第 N 位成員說謊。");
     println!("輸入 /quit 結束遊戲。");
 
-    // ── 先讓所有演員各開場一次（隨機順序）─────────────────────────────────────
-    print_divider("📢 各成員開場發言");
-    let opening_order = session.speaking_order();
+    // ── 開場：由 director 挑 1-3 人發言 ───────────────────────────────────────
+    print_divider("📢 開場發言");
+    let opening_order = director
+        .pick_next_speakers(TurnContext { actors: &session.actors, transcript: &session.transcript })
+        .await
+        .with_context(|| "開場挑人失敗")?;
     for actor in &opening_order {
         match session.actor_respond(&actor.id, &args.model).await {
             Ok(fragments) => {
@@ -343,18 +375,18 @@ async fn main() -> anyhow::Result<()> {
             round += 1;
         }
 
-        // 檢查是否有沉默太久的演員，讓其他人 cue 他
-        let silent = session.silent_actors();
-        let turn_order = session.speaking_order();
-        for actor in &turn_order {
-            // 如果這個演員要 cue 沉默者，先印提示
-            if !silent.is_empty() && !silent.contains(&actor.id) {
-                for sid in &silent {
-                    if let Some(silent_actor) = selected_actors.iter().find(|a| &a.id == sid) {
-                        println!("\n（{} 轉向 {} 說：「你覺得呢？」）", actor.name, silent_actor.name);
-                    }
-                }
+        // 由 director 挑本輪發言者（演算法 or 主持人）
+        let speakers = match director
+            .pick_next_speakers(TurnContext { actors: &session.actors, transcript: &session.transcript })
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("⚠️  挑選發言者失敗：{}", e);
+                continue;
             }
+        };
+        for actor in &speakers {
             match session.actor_respond(&actor.id, &args.model).await {
                 Ok(fragments) => {
                     for frag in &fragments {

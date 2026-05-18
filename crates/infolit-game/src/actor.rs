@@ -17,6 +17,10 @@ pub struct Actor {
     #[serde(default)]
     pub personality_traits: Vec<String>,
     pub speech_style: String,
+    /// 該角色看事情的角度／論點切入點。例：「從機制原理切入」「從個人感受切入」。
+    /// 用來區隔同一話題下各 actor 不會聚焦在同樣論點。
+    #[serde(default)]
+    pub discussion_lens: String,
     /// 向性值 1–12（錨點 3=情感 / 6=邏輯 / 9=正式權威 / 10-12=魅力/超然型）
     pub affinity: u8,
     /// 對話積極度 1–10（越高越容易搶先發言），預設 5
@@ -81,6 +85,7 @@ mod tests {
             short_bio: String::new(),
             personality_traits: vec![],
             speech_style: String::new(),
+            discussion_lens: String::new(),
             affinity,
             eagerness: 5,
         }

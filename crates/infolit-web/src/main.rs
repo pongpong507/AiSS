@@ -69,6 +69,14 @@ struct Args {
     /// 啟用 thinking 模式
     #[arg(long, env = "THINK")]
     think: bool,
+
+    /// 主持人模式：指定 NPC ID 當主持人（由 LLM 決定點誰發言）；省略則用純演算法
+    #[arg(long, env = "MODERATOR")]
+    moderator: Option<String>,
+
+    /// 啟用 debug 對話紀錄，每局寫一份 Markdown 到 logs/session-<uuid>.md
+    #[arg(long, env = "INFOLIT_DEBUG_LOG")]
+    debug_log: bool,
 }
 
 // ── 應用狀態 ─────────────────────────────────────────────────────────────────
@@ -84,6 +92,7 @@ struct AppState {
     topics: Vec<shared_types::Topic>,
     provider: Arc<dyn LlmProvider>,
     model: String,
+    director: Arc<dyn infolit_game::turn_director::TurnDirector>,
 }
 
 // ── API 請求/回應型別 ────────────────────────────────────────────────────────
@@ -172,7 +181,7 @@ async fn create_game(
         recent.iter().cloned().collect()
     };
 
-    let (selected, liar_ids, deceptions) =
+    let (mut selected, liar_ids, deceptions) =
         assemble_session(
             &state.actors,
             &state.catalog,
@@ -181,6 +190,44 @@ async fn create_game(
             &recent_snapshot,
         )
         .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // 如果 director 要求某 actor 一定要在場（主持人模式），確保塞進來
+    if let Some(required_id) = state.director.required_actor() {
+        let already_in = selected.iter().any(|a| a.id == required_id);
+        if !already_in {
+            if let Some(must_have) = state.actors.iter().find(|a| a.id == required_id) {
+                // 找一個非騙子的位置替換，避免破壞騙子分配
+                let liar_set: std::collections::HashSet<&str> =
+                    liar_ids.iter().map(|s| s.as_str()).collect();
+                let swap_idx = selected
+                    .iter()
+                    .position(|a| !liar_set.contains(a.id.as_str()));
+                match swap_idx {
+                    Some(idx) => {
+                        let dropped = selected[idx].name.clone();
+                        selected[idx] = must_have.clone();
+                        info!(
+                            "主持人 {} 不在原本選擇中，替換 {} 進場",
+                            must_have.name, dropped
+                        );
+                    }
+                    None => {
+                        // 全部都是騙子（罕見），替換最後一位（會少一個騙子，但比沒主持人好）
+                        if let Some(last) = selected.last_mut() {
+                            let dropped = last.name.clone();
+                            *last = must_have.clone();
+                            info!(
+                                "主持人 {} 替換騙子 {}（全員皆騙子的極端情況）",
+                                must_have.name, dropped
+                            );
+                        }
+                    }
+                }
+            } else {
+                warn!("主持人 id 「{}」在 actor 池中找不到，本局將無主持人", required_id);
+            }
+        }
+    }
 
     // 記錄本局演員到 recent，供下一局降權
     {
@@ -236,6 +283,26 @@ async fn create_game(
 /// SSE 回應型別別名
 type SseStream = Sse<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>;
 
+/// 透過 TurnDirector 挑出本輪發言的 actor。
+/// 一次只持有 session 鎖讀 context，director 呼叫期間不佔鎖（ModeratorDirector 會做 LLM call）。
+async fn pick_speakers(
+    state: &Arc<AppState>,
+    session_id: Uuid,
+) -> anyhow::Result<Vec<infolit_game::actor::Actor>> {
+    let (actors, transcript) = {
+        let sessions = state.sessions.lock().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| anyhow::anyhow!("找不到遊戲 {}", session_id))?;
+        (session.actors.clone(), session.transcript.clone())
+    };
+    let ctx = infolit_game::turn_director::TurnContext {
+        actors: &actors,
+        transcript: &transcript,
+    };
+    state.director.pick_next_speakers(ctx).await
+}
+
 /// 把單一演員的多段訊息逐個透過 SSE 送出，模擬「打字節奏」
 ///
 /// 第一段立即送（避免 round trip 卡住），第二段以後依長度加 350-700ms 隨機延遲。
@@ -288,10 +355,15 @@ async fn opening_round(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
 
     tokio::spawn(async move {
-        let order = {
-            let sessions = state.sessions.lock().await;
-            let session = sessions.get(&session_id).unwrap();
-            session.speaking_order()
+        let order = match pick_speakers(&state, session_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("挑選發言者失敗：{}", e);
+                let _ = tx
+                    .send(Ok(Event::default().event("done").data("ok")))
+                    .await;
+                return;
+            }
         };
 
         for actor in &order {
@@ -395,10 +467,15 @@ async fn respond(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
 
     tokio::spawn(async move {
-        let order = {
-            let sessions = state.sessions.lock().await;
-            let session = sessions.get(&session_id).unwrap();
-            session.speaking_order()
+        let order = match pick_speakers(&state, session_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("挑選發言者失敗：{}", e);
+                let _ = tx
+                    .send(Ok(Event::default().event("done").data("ok")))
+                    .await;
+                return;
+            }
         };
 
         for actor in &order {
@@ -513,6 +590,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // 把 clap 的 --debug-log flag 同步到 env var，讓 debug_log 模組能讀到
+    if args.debug_log {
+        std::env::set_var("INFOLIT_DEBUG_LOG", "1");
+        info!("Debug 對話紀錄已啟用 — 每局寫到 ./logs/session-<uuid>.md");
+    }
+
     // 載入內容
     let actors = load_actors_from_dir(&args.content_dir.join("actors"))?;
     let catalog = load_deceptions_from_dir(&args.content_dir.join("deception-patterns"))?;
@@ -533,6 +616,20 @@ async fn main() -> anyhow::Result<()> {
     let provider: Arc<dyn LlmProvider> =
         Arc::new(OllamaProvider::new(&args.ollama_url, &args.model).with_thinking(thinking));
 
+    let director: Arc<dyn infolit_game::turn_director::TurnDirector> = match &args.moderator {
+        Some(id) => {
+            info!(moderator = %id, "啟用主持人模式");
+            Arc::new(infolit_game::turn_director::ModeratorDirector::new(
+                id.clone(),
+                provider.clone(),
+                args.model.clone(),
+                1,
+                3,
+            ))
+        }
+        None => Arc::new(infolit_game::turn_director::AlgorithmicDirector::new(1, 3)),
+    };
+
     let state = Arc::new(AppState {
         sessions: Mutex::new(HashMap::new()),
         pending_messages: Mutex::new(HashMap::new()),
@@ -542,6 +639,7 @@ async fn main() -> anyhow::Result<()> {
         topics,
         provider,
         model: args.model.clone(),
+        director,
     });
 
     let app = Router::new()

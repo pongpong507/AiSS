@@ -157,6 +157,12 @@ struct OllamaOptions {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_predict: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat_penalty: Option<f32>,
+    /// 重複懲罰的回看視窗（token 數）。Ollama 預設 64 太小、跨片段重複看不到。
+    /// 只在 repeat_penalty 設定時一併送出，預設 256。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat_last_n: Option<u32>,
 }
 
 /// Ollama /api/chat 非串流回應
@@ -256,8 +262,13 @@ impl LlmProvider for OllamaProvider {
             req.max_tokens
         };
 
-        let options = if req.temperature.is_some() || effective_max_tokens.is_some() {
-            Some(OllamaOptions { temperature: req.temperature, num_predict: effective_max_tokens })
+        let options = if req.temperature.is_some() || effective_max_tokens.is_some() || req.repeat_penalty.is_some() {
+            Some(OllamaOptions {
+                temperature: req.temperature,
+                num_predict: effective_max_tokens,
+                repeat_penalty: req.repeat_penalty,
+                repeat_last_n: req.repeat_penalty.map(|_| 256),
+            })
         } else {
             None
         };
@@ -346,8 +357,13 @@ impl LlmProvider for OllamaProvider {
             })
             .collect::<Vec<_>>();
 
-        let options = if req.temperature.is_some() || req.max_tokens.is_some() {
-            Some(OllamaOptions { temperature: req.temperature, num_predict: req.max_tokens })
+        let options = if req.temperature.is_some() || req.max_tokens.is_some() || req.repeat_penalty.is_some() {
+            Some(OllamaOptions {
+                temperature: req.temperature,
+                num_predict: req.max_tokens,
+                repeat_penalty: req.repeat_penalty,
+                repeat_last_n: req.repeat_penalty.map(|_| 256),
+            })
         } else {
             None
         };
